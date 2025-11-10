@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package saasforge.auth;
+
+option go_package = "github.com/saasforge/proto/auth";
+
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+  optional string totp_code = 3;
+}
+
+message LoginResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  string user_id = 3;
+  string tenant_id = 4;
+  int64 expires_in = 5;
+}
+
+message LogoutRequest {
+  string refresh_token = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+}
+
+message ValidateTokenRequest {
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  repeated string roles = 4;
+}
+
+message CreateApiKeyRequest {
+  string name = 1;
+  repeated string scopes = 2;
+  optional int64 expires_at = 3;
+}
+
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string api_key = 2;
+  string name = 3;
+  repeated string scopes = 4;
+  int64 created_at = 5;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message RevokeApiKeyResponse {
+  bool success = 1;
+}

@@ -1,0 +1,67 @@
+# Build outputs
+build/
+dist/
+*.o
+*.a
+*.so
+*.exe
+
+# C++ artifacts
+services/cpp/build/
+services/cpp/generated/
+
+# Python
+api/__pycache__/
+api/*.pyc
+api/.pytest_cache/
+api/venv/
+api/.env
+api/generated/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+ui/node_modules/
+ui/dist/
+ui/.vite/
+ui/.env.local
+ui/.env.production
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and certificates
+.env
+*.key
+*.pem
+*.crt
+certs/
+!certs/.gitkeep
+
+# Databases
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Test outputs
+test-results/
+playwright-report/
+coverage/
+
+# Docker
+docker-compose.override.yml
+
+# Kubernetes secrets
+k8s/**/secrets.yaml

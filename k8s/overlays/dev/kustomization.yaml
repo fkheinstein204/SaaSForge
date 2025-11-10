@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: saasforge-dev
+
+resources:
+- ../../base/auth-deployment.yaml
+- ../../base/api-deployment.yaml
+- ../../base/ingress.yaml
+
+replicas:
+- name: auth-service
+  count: 1
+- name: api
+  count: 1
+
+images:
+- name: saasforge/auth-service
+  newTag: dev
+- name: saasforge/api
+  newTag: dev
+
+configMapGenerator:
+- name: app-config
+  literals:
+  - ENVIRONMENT=development
+  - LOG_LEVEL=debug

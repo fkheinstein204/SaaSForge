@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Build artifacts
+build/
+dist/
+node_modules/
+
+# Tests
+tests/
+*.test.*
+*.spec.*
+
+# CI/CD
+.github/
+
+# Development files
+.env
+.env.local
+docker-compose.yml
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

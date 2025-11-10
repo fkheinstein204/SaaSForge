@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git -C /home/parallels/Projects/DevOps/SaaSForge log --oneline -10)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(tree:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []

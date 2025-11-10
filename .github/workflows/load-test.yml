@@ -1,0 +1,39 @@
+name: Load Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday
+
+jobs:
+  load-test:
+    name: Run Load Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Run load tests
+        env:
+          BASE_URL: ${{ secrets.STAGING_URL }}
+        run: |
+          k6 run tests/load/api_load_test.js --out json=results.json
+
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: load-test-results
+          path: results.json
+
+      - name: Analyze results
+        run: |
+          # TODO: Parse results and fail if thresholds exceeded
+          echo "Analyzing load test results..."

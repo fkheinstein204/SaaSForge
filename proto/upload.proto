@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package saasforge.upload;
+
+option go_package = "github.com/saasforge/proto/upload";
+
+service UploadService {
+  rpc GeneratePresignedUrl(PresignedUrlRequest) returns (PresignedUrlResponse);
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+  rpc TransformObject(TransformRequest) returns (TransformResponse);
+  rpc DeleteObject(DeleteObjectRequest) returns (DeleteObjectResponse);
+  rpc GetQuota(GetQuotaRequest) returns (GetQuotaResponse);
+}
+
+message PresignedUrlRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string filename = 3;
+  string content_type = 4;
+  int64 content_length = 5;
+  string checksum_sha256 = 6;
+  map<string, string> metadata = 7;
+}
+
+message PresignedUrlResponse {
+  string url = 1;
+  string upload_id = 2;
+  int64 expires_in = 3;
+  map<string, string> required_headers = 4;
+}
+
+message CompleteUploadRequest {
+  string tenant_id = 1;
+  string upload_id = 2;
+  string etag = 3;
+}
+
+message CompleteUploadResponse {
+  string object_id = 1;
+  string url = 2;
+  int64 size = 3;
+  string checksum_sha256 = 4;
+}
+
+message TransformRequest {
+  string tenant_id = 1;
+  string object_id = 2;
+  string profile_id = 3;
+  optional string output_format = 4;
+}
+
+message TransformResponse {
+  string job_id = 1;
+  string status = 2;
+  optional int64 estimated_completion = 3;
+}
+
+message DeleteObjectRequest {
+  string tenant_id = 1;
+  string object_id = 2;
+}
+
+message DeleteObjectResponse {
+  bool success = 1;
+}
+
+message GetQuotaRequest {
+  string tenant_id = 1;
+}
+
+message GetQuotaResponse {
+  string tenant_id = 1;
+  int64 used_bytes = 2;
+  int64 limit_bytes = 3;
+  int64 remaining_bytes = 4;
+  int64 reset_at = 5;
+}

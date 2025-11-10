@@ -473,3 +473,4 @@ grpc::Status ValidateTenantAccess(grpc::ServerContext* context,
 5. **Week 8:** Testing & hardening (unit, integration, E2E, security audit)
 
 Refer to authentication architecture document (lines 562-606) for detailed roadmap.
+- # add ssh key ssh-add ~/.ssh/id_rsa_git-work before

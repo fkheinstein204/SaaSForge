@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: saasforge
+      POSTGRES_USER: saasforge
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saasforge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # C++ gRPC services (uncomment after building)
+  # auth-service:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/auth.Dockerfile
+  #   ports:
+  #     - "50051:50051"
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   environment:
+  #     DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+  #     REDIS_URL: redis://redis:6379
+
+  # upload-service:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/upload.Dockerfile
+  #   ports:
+  #     - "50052:50052"
+  #   depends_on:
+  #     - postgres
+  #     - redis
+
+  # payment-service:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/payment.Dockerfile
+  #   ports:
+  #     - "50053:50053"
+  #   depends_on:
+  #     - postgres
+  #     - redis
+
+  # notification-service:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/notification.Dockerfile
+  #   ports:
+  #     - "50054:50054"
+  #   depends_on:
+  #     - postgres
+  #     - redis
+
+  # FastAPI BFF (uncomment after implementation)
+  # api:
+  #   build:
+  #     context: ./api
+  #     dockerfile: ../docker/api.Dockerfile
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - auth-service
+  #     - upload-service
+  #     - payment-service
+  #     - notification-service
+  #   environment:
+  #     DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+  #     REDIS_URL: redis://redis:6379
+  #   volumes:
+  #     - ./api:/app
+
+  # React UI (uncomment after implementation)
+  # ui:
+  #   build:
+  #     context: ./ui
+  #     dockerfile: ../docker/ui.Dockerfile
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - api
+  #   volumes:
+  #     - ./ui:/app
+  #     - /app/node_modules
+
+volumes:
+  postgres_data:
+  redis_data:

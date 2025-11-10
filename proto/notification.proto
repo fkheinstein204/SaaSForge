@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package saasforge.notification;
+
+option go_package = "github.com/saasforge/proto/notification";
+
+service NotificationService {
+  rpc SendEmail(SendEmailRequest) returns (NotificationResponse);
+  rpc SendSMS(SendSMSRequest) returns (NotificationResponse);
+  rpc SendPush(SendPushRequest) returns (NotificationResponse);
+  rpc TriggerWebhook(TriggerWebhookRequest) returns (NotificationResponse);
+  rpc GetNotificationStatus(GetNotificationStatusRequest) returns (NotificationResponse);
+  rpc UpdatePreferences(UpdatePreferencesRequest) returns (PreferencesResponse);
+  rpc RegisterWebhook(RegisterWebhookRequest) returns (WebhookResponse);
+}
+
+enum NotificationChannel {
+  NOTIFICATION_CHANNEL_UNSPECIFIED = 0;
+  EMAIL = 1;
+  SMS = 2;
+  PUSH = 3;
+  WEBHOOK = 4;
+}
+
+enum NotificationStatus {
+  NOTIFICATION_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  SENT = 2;
+  DELIVERED = 3;
+  FAILED = 4;
+  BOUNCED = 5;
+}
+
+message SendEmailRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string to = 3;
+  string subject = 4;
+  string body_html = 5;
+  optional string body_text = 6;
+  optional string template_id = 7;
+  map<string, string> template_vars = 8;
+}
+
+message SendSMSRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string to = 3;
+  string message = 4;
+}
+
+message SendPushRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string title = 3;
+  string body = 4;
+  map<string, string> data = 5;
+}
+
+message TriggerWebhookRequest {
+  string tenant_id = 1;
+  string webhook_id = 2;
+  string event_type = 3;
+  string payload = 4;
+}
+
+message NotificationResponse {
+  string id = 1;
+  NotificationChannel channel = 2;
+  NotificationStatus status = 3;
+  int64 created_at = 4;
+  optional int64 sent_at = 5;
+  optional int64 delivered_at = 6;
+  int32 retry_count = 7;
+}
+
+message GetNotificationStatusRequest {
+  string tenant_id = 1;
+  string notification_id = 2;
+}
+
+message UpdatePreferencesRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  bool email_enabled = 3;
+  bool sms_enabled = 4;
+  bool push_enabled = 5;
+  bool marketing_emails = 6;
+}
+
+message PreferencesResponse {
+  string user_id = 1;
+  bool email_enabled = 2;
+  bool sms_enabled = 3;
+  bool push_enabled = 4;
+  bool marketing_emails = 5;
+  int64 updated_at = 6;
+}
+
+message RegisterWebhookRequest {
+  string tenant_id = 1;
+  string url = 2;
+  repeated string events = 3;
+  optional string secret = 4;
+}
+
+message WebhookResponse {
+  string id = 1;
+  string url = 2;
+  repeated string events = 3;
+  string status = 4;
+  int64 created_at = 5;
+  optional int64 last_triggered_at = 6;
+  int32 failure_count = 7;
+}
