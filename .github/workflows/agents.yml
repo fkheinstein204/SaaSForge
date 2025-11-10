@@ -1,0 +1,124 @@
+name: Review Agents
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  security-agent:
+    name: 🔐 Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Security Agent
+        run: python3 .agents/security/review.py .
+        continue-on-error: true
+
+  architecture-agent:
+    name: 🏛️ Architecture Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Architecture Agent
+        run: python3 .agents/architecture/review.py .
+        continue-on-error: true
+
+  architect-agent:
+    name: 🏗️ Software Architect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Architect Agent
+        run: python3 .agents/architect/review.py .
+
+  performance-agent:
+    name: ⚡ Performance Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Performance Agent
+        run: python3 .agents/performance/review.py .
+
+  database-agent:
+    name: 🗄️ Database Schema Review
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.changed_files, 'db/migrations')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Database Agent
+        run: python3 .agents/database/review.py db/migrations/
+
+  testing-agent:
+    name: 🧪 Testing Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run Testing Agent
+        run: python3 .agents/testing/review.py tests/
+
+  agent-summary:
+    name: 📊 Agent Summary
+    runs-on: ubuntu-latest
+    needs: [security-agent, architecture-agent, architect-agent, performance-agent, database-agent, testing-agent]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🤖 Review Agent Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All automated review agents have completed." >> $GITHUB_STEP_SUMMARY
+          echo "Check individual job outputs for details." >> $GITHUB_STEP_SUMMARY

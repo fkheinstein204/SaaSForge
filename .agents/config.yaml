@@ -1,0 +1,75 @@
+# SaaSForge Review Agents Configuration
+
+security:
+  enabled: true
+  severity_threshold: medium  # low, medium, high, critical
+  checks:
+    jwt_algorithm_whitelist: true
+    tenant_isolation: true
+    ssrf_protection: true
+    sql_injection: true
+    secrets_detection: true
+    csrf_protection: true
+
+architecture:
+  enabled: true
+  srs_document: docs/srs-boilerplate-saas.md
+  checks:
+    requirement_traceability: true
+    error_code_format: true
+    idempotency_required_endpoints:
+      - POST /v1/payments/*
+      - POST /v1/subscriptions/*
+    multi_tenant_patterns: true
+
+performance:
+  enabled: true
+  targets:
+    jwt_validation_ms: 2
+    login_ms: 500
+    presign_ms: 300
+    query_timeout_ms: 1000
+  checks:
+    n_plus_one_queries: true
+    missing_indexes: true
+    connection_pooling: true
+    cache_usage: true
+
+api_contract:
+  enabled: true
+  proto_dir: proto/
+  checks:
+    backward_compatibility: true
+    breaking_changes: true
+    required_field_changes: true
+    deprecated_fields: true
+
+database:
+  enabled: true
+  checks:
+    tenant_id_required: true
+    missing_indexes: true
+    migration_reversibility: true
+    retention_compliance: true
+    foreign_key_constraints: true
+
+testing:
+  enabled: true
+  minimum_coverage: 80
+  checks:
+    auth_flow_tests: true
+    multi_tenant_isolation: true
+    error_handling: true
+    edge_cases: true
+    integration_tests: true
+
+architect:
+  enabled: true
+  three_tier_enforcement: strict  # strict, moderate, lenient
+  checks:
+    layer_separation: true
+    communication_patterns: true
+    resilience_patterns: true
+    observability: true
+    statelessness: true
+  architecture_rules: .agents/architect/ARCHITECTURE_RULES.md

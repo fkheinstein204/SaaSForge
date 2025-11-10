@@ -4,7 +4,8 @@
       "Bash(git -C /home/parallels/Projects/DevOps/SaaSForge log --oneline -10)",
       "Bash(git add:*)",
       "Bash(tree:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []
