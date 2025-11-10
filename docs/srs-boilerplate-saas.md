@@ -312,7 +312,7 @@ service NotificationService {
 
 12. The system shall allow tenant admins to create API keys with name, scope(s), expiry, and status (active/revoked).
 13. The system shall store only a hash of API keys and display the secret exactly once on creation.
-14. The system shall enforce scopes and tenant isolation for API key calls.
+14. The system shall enforce scopes and tenant isolation for API key calls; validate API key scopes against requested resource actions; reject requests when API key lacks required scope; support wildcard scopes (e.g., "read:*") with prefix matching; deny by default when scope is ambiguous or unmatched.
 
 #### A-5 Roles & Authorization
 
@@ -329,7 +329,7 @@ service NotificationService {
 
 20. The system shall detect refresh token reuse and revoke the corresponding session and any tokens minted after the compromised point.
 21. The system shall support token rotation with grace periods and blacklist revoked tokens in Redis until expiry.
-22. The system shall validate JWT tokens on every request by checking: signature validity, expiration, audience, issuer, and Redis blacklist status.
+22. The system shall validate JWT tokens on every request by checking: signature validity, expiration, audience, issuer, and Redis blacklist status; explicitly whitelist RS256 algorithm only and reject tokens with any other algorithm including unsigned tokens (alg: none) to prevent algorithm confusion attacks.
 23. The system shall support JWT key rotation with a grace period (24 hours) where both old and new public keys are accepted.
 
 #### A-8 Service-to-Service Authentication
@@ -338,15 +338,30 @@ service NotificationService {
 25. The system shall validate client certificates on the server side and server certificates on the client side.
 26. The system shall rotate service certificates automatically every 90 days using cert-manager (Kubernetes) or equivalent.
 27. The system shall use TLS 1.3 where supported, with fallback to TLS 1.2; TLS 1.0 and 1.1 shall be disabled.
+28. The system shall maintain Certificate Revocation List (CRL) or support OCSP for mTLS certificates; check certificate revocation status before accepting mTLS connections; revoke compromised certificates within 1 hour of security incident detection.
 
 #### A-9 Rate Limiting & Account Protection
 
-28. The system shall implement rate limits per identity type: user, tenant, API key, IP; include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
-29. When 20 failed logins occur for the same account within 2 minutes, the system shall lock the account for 15 minutes and emit `AUDIT_AUTH_RATE_LIMIT` within 200 ms.
+29. The system shall implement rate limits per identity type: user, tenant, API key, IP; include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
+30. When 20 failed logins occur for the same account within 2 minutes, the system shall lock the account for 15 minutes and emit `AUDIT_AUTH_RATE_LIMIT` within 200 ms.
 
-#### A-10 Idempotency
+#### A-10 CSRF Protection
 
-30. The system shall treat requests with identical `Idempotency-Key` within a 24-hour window as the same operation and return the original result without re-executing side effects.
+31. The system shall require CSRF tokens for all state-changing operations (POST, PUT, PATCH, DELETE) when using cookie-based authentication; generate unique CSRF tokens per session; validate CSRF token on server side before processing request; reject requests with missing or invalid CSRF tokens with HTTP 403 status.
+
+#### A-11 Idempotency
+
+32. The system shall treat requests with identical `Idempotency-Key` within a 24-hour window as the same operation and return the original result without re-executing side effects.
+
+#### A-12 OAuth 2.0/OIDC Integration
+
+33. The system shall support OAuth 2.0 authorization code flow with PKCE for external identity providers: Google, GitHub, and Microsoft.
+34. The system shall validate OAuth state parameter on callback to prevent CSRF attacks and ensure request/response correlation.
+35. The system shall handle OAuth callback, exchange authorization code for tokens, and verify token signatures according to OIDC specifications.
+36. The system shall link OAuth accounts to existing user accounts via verified email matching; prompt user for confirmation if email already exists.
+37. The system shall allow users to link multiple OAuth providers to a single account and unlink providers while maintaining account access via at least one authentication method.
+38. The system shall store OAuth provider tokens encrypted at rest and support automatic token refresh using refresh tokens where available.
+39. The system shall handle OAuth errors gracefully (access denied, invalid state, expired tokens) and provide user-friendly error messages with retry options.
 
 ---
 
@@ -354,46 +369,47 @@ service NotificationService {
 
 #### B-1 Presigned Upload
 
-23. The system shall return a presigned URL (or form fields) for client-side upload to S3/R2 with content-type, max size, checksum constraints.
-24. The system shall support multipart/resumable uploads and report part ETags.
-25. The system shall verify client-provided checksum (e.g., SHA-256) and compare with S3 ETag or server-computed hash.
-26. The system shall issue presigned URLs with TTL ≤ 10 minutes, bound to `Content-Length`, `Content-Type`, and a canonical object key; any drift shall be rejected by the storage service.
+40. The system shall return a presigned URL (or form fields) for client-side upload to S3/R2 with content-type, max size, checksum constraints.
+41. The system shall support multipart/resumable uploads and report part ETags; for multipart uploads, require per-part SHA-256 checksums, validate each part before accepting CompleteMultipartUpload, and compute final object checksum after assembly.
+42. The system shall verify client-provided checksum (e.g., SHA-256) and compare with S3 ETag or server-computed hash.
+43. The system shall issue presigned URLs with TTL ≤ 10 minutes, bound to exact `Content-Length` match, `Content-Type` with charset normalization, and `x-amz-checksum-sha256` header presence; any drift shall be rejected by the storage service.
 
 #### B-2 Security & Validation
 
-27. The system shall enforce tenant/user quotas (bytes/day, bytes/month, object count, max object size).
-28. The system shall perform antivirus scanning (e.g., ClamAV/Lambda layer) before marking an object as CLEAN.
-29. The system shall validate MIME type, extension policy, and max dimensions/duration for images/video.
-30. The system shall reject and purge objects that fail validation, emitting an audit/event with reason code.
-31. The system shall detect archive bombs by enforcing `max_uncompressed_size`, `max_file_count`, and tree depth; offending uploads shall be rejected with `UP_002`.
-32. The system shall store checksums (client-supplied SHA-256 + server-side verification); reject if mismatch with `UP_005`.
-33. The system shall use deterministic path layout (`tenantId/YYYY/MM/{objectId}`) to prevent key guessing; no user-controlled path segments allowed.
+44. The system shall reject uploads when tenant quota exceeded (hard limit); allow 10% grace overage for paid plans then enforce hard limit; reset daily quotas at midnight UTC; provide API endpoint for checking remaining quota.
+45. The system shall perform antivirus scanning (e.g., ClamAV/Lambda layer) before marking an object as CLEAN.
+46. The system shall validate MIME type, extension policy, and max dimensions/duration for images/video.
+47. The system shall reject and purge objects that fail validation, emitting an audit/event with reason code.
+48. The system shall detect archive bombs by enforcing `max_uncompressed_size`, `max_file_count`, and tree depth; offending uploads shall be rejected with `UP_002`.
+49. The system shall store checksums (client-supplied SHA-256 + server-side verification); reject if mismatch with `UP_005`.
+50. The system shall use deterministic path layout (`tenantId/YYYY/MM/{objectId}`) to prevent key guessing; no user-controlled path segments allowed.
 
 #### B-3 Transformation Pipeline
 
-34. The system shall support post-upload transformations (e.g., image resize, PDF OCR, video transcode) via:
+51. The system shall support post-upload transformations (e.g., image resize, PDF OCR, video transcode) via:
     - **AWS:** S3 event → Lambda/SQS/Step Functions
     - **Azure:** Blob event → Azure Functions/Queue Storage/Durable Functions
 
-35. The system shall store transform artifacts under deterministic keys (e.g., `/derived/{objectId}/{profile}.ext`).
-36. The system shall expose idempotent reprocessing (manual retrigger) with previous artifacts preserved or versioned.
-37. The system shall support declarative transformation profiles with `profileId`, `type` (image/video/pdf), `steps[]`, and `limits`.
+52. The system shall store transform artifacts under deterministic keys (e.g., `/derived/{objectId}/{profile}.ext`).
+53. The system shall expose idempotent reprocessing (manual retrigger) with previous artifacts preserved or versioned.
+54. The system shall support declarative transformation profiles stored in PostgreSQL JSONB with YAML import/export capability; profiles include `profileId`, `type` (image/video/pdf), `steps[]`, `limits`, and version number; provide profile validation API and support profile versioning for updates.
+55. The system shall enforce per-profile timeout for transformations; terminate transformations exceeding timeout and mark as FAILED; allow timeout configuration per profile (max: 300s).
 
 #### B-4 Encryption & Retention
 
-38. The system shall enable server-side encryption with SSE-KMS and support per-tenant CMKs.
-39. The system shall allow per-object retention policies (legal hold, TTL) mapped to bucket lifecycle rules.
+56. The system shall enable server-side encryption with SSE-KMS and support per-tenant CMKs.
+57. The system shall allow per-object retention policies (legal hold, TTL) mapped to bucket lifecycle rules.
 
 #### B-5 Observability & Status
 
-40. The system shall track upload state machine: `REQUESTED → UPLOADING → VALIDATING → TRANSFORMING → CLEAN → AVAILABLE | REJECTED | FAILED`.
-41. The system shall publish events (upload completed, validation failed, transform completed) for notifications/webhooks.
-42. The system shall provide `GET /v1/upload/{objectId}/status` with current state, errors, and artifact URIs (signed).
+58. The system shall track upload state machine: `REQUESTED → UPLOADING → VALIDATING → TRANSFORMING → CLEAN → AVAILABLE | REJECTED | FAILED`.
+59. The system shall publish events (upload completed, validation failed, transform completed) for notifications/webhooks.
+60. The system shall provide `GET /v1/upload/{objectId}/status` with current state, errors, and artifact URIs (signed).
 
 #### B-6 Pagination & List Operations
 
-43. The system shall implement cursor-based pagination with `nextCursor` for all list operations; hard cap at 1000 items per request.
-44. The system shall support filtering and sorting on upload lists by status, date, size, and owner.
+61. The system shall implement cursor-based pagination with `nextCursor` for all list operations; hard cap at 1000 items per request.
+62. The system shall support filtering and sorting on upload lists by status, date, size, and owner.
 
 ---
 
@@ -401,47 +417,47 @@ service NotificationService {
 
 #### C-1 Subscription Lifecycle
 
-45. The system shall support subscription states: `trialing`, `active`, `past_due`, `canceled`, `unpaid`, `paused`.
-46. The system shall automatically transition subscriptions based on payment status and support grace periods (3 days for failed payments).
-47. The system shall support trial periods (7, 14, or 30 days) with automatic conversion to paid upon trial end.
-48. The system shall allow immediate cancellation or cancellation at period end with pro-rata refunds (configurable).
+63. The system shall support subscription states: `trialing`, `active`, `past_due`, `canceled`, `unpaid`, `paused`.
+64. The system shall automatically transition subscriptions based on payment status and support grace periods (3 days for failed payments).
+65. The system shall support trial periods (7, 14, or 30 days) with automatic conversion to paid upon trial end.
+66. The system shall allow immediate cancellation or cancellation at period end with pro-rata refunds (configurable).
 
 #### C-2 Payment Processing
 
-49. The system shall integrate with Stripe for payment processing with PCI-DSS Level 1 compliance (no card storage).
-50. The system shall support payment methods: credit/debit cards, ACH, SEPA, Apple Pay, Google Pay.
-51. The system shall implement Strong Customer Authentication (SCA/3D Secure 2.0) for EU compliance.
-52. The system shall tokenize payment methods and store only tokens, never raw card data.
-53. The system shall retry failed payments automatically using exponential backoff (1, 3, 7 days) with email notifications.
+67. The system shall integrate with Stripe for payment processing with PCI-DSS Level 1 compliance (no card storage).
+68. The system shall support payment methods: credit/debit cards, ACH, SEPA, Apple Pay, Google Pay.
+69. The system shall implement Strong Customer Authentication (SCA/3D Secure 2.0) for EU compliance.
+70. The system shall tokenize payment methods and store only tokens, never raw card data.
+71. The system shall retry failed payments on fixed schedule: Day 1, Day 3, Day 7 after failure, then mark subscription as past_due with email notifications before each retry; after 3 failed retries, transition to 'unpaid' status.
 
 #### C-3 Plans & Pricing
 
-54. The system shall support predefined plans: **Free** (0/mo), **Pro** ($29/mo), **Enterprise** (custom).
-55. The system shall support both flat-fee and usage-based billing components (metered storage, API calls, transforms).
-56. The system shall calculate proration on plan upgrades/downgrades based on time remaining in billing period.
-57. The system shall support annual billing with discounts (e.g., 2 months free for annual commitment).
+72. The system shall support predefined plans: **Free** (0/mo), **Pro** ($29/mo), **Enterprise** (custom).
+73. The system shall support both flat-fee and usage-based billing components (metered storage, API calls, transforms).
+74. The system shall calculate proration using per-second billing for remaining period; on upgrade, charge prorated difference immediately; on downgrade, issue credit applied to next invoice; round amounts to 2 decimal places.
+75. The system shall support annual billing with discounts (e.g., 2 months free for annual commitment).
 
 #### C-4 Invoicing & Billing
 
-58. The system shall generate invoices automatically at billing cycle start (monthly or annual).
-59. The system shall include line items: subscription fees, usage charges, credits, taxes, and discounts.
-60. The system shall calculate taxes using Stripe Tax or Avalara based on customer location.
-61. The system shall provide invoice download as PDF with company branding and support multi-currency (USD, EUR, GBP).
-62. The system shall send invoice emails 3 days before due date and payment receipt emails immediately after successful payment.
+76. The system shall generate invoices automatically at billing cycle start (monthly or annual).
+77. The system shall include line items: subscription fees, usage charges, credits, taxes, and discounts.
+78. The system shall calculate taxes using Stripe Tax or Avalara based on customer location.
+79. The system shall provide invoice download as PDF with company branding and support multi-currency (USD, EUR, GBP).
+80. The system shall send invoice emails 3 days before due date and payment receipt emails immediately after successful payment.
 
 #### C-5 Usage Tracking & Metering
 
-63. The system shall meter usage for: storage (GB-hours), API calls, upload bandwidth, transform minutes.
-64. The system shall aggregate usage records hourly and calculate billing amounts daily.
-65. The system shall expose real-time usage API endpoint showing current period consumption vs. plan limits.
-66. The system shall send usage alerts at 80% and 100% of quota thresholds.
+81. The system shall meter usage for: storage (GB-hours), API calls, upload bandwidth, transform minutes.
+82. The system shall aggregate usage records hourly and calculate billing amounts daily.
+83. The system shall expose real-time usage API endpoint showing current period consumption vs. plan limits.
+84. The system shall send usage alerts at 80% and 100% of quota thresholds.
 
 #### C-6 Payment Security & Compliance
 
-67. The system shall log all payment events (successful, failed, refunded) with correlation IDs for audit.
-68. The system shall implement fraud detection using Stripe Radar with custom rules for high-risk transactions.
-69. The system shall support payment disputes and chargebacks with automated workflow notifications.
-70. The system shall maintain PCI-DSS compliance by never logging or storing sensitive payment data.
+85. The system shall log all payment events (successful, failed, refunded) with correlation IDs for audit.
+86. The system shall implement fraud detection using Stripe Radar with custom rules for high-risk transactions.
+87. The system shall support payment disputes and chargebacks with automated workflow notifications.
+88. The system shall maintain PCI-DSS compliance by never logging or storing sensitive payment data.
 
 ---
 
@@ -449,14 +465,14 @@ service NotificationService {
 
 #### D-1 Notification Channels
 
-71. The system shall support notification delivery via: email, SMS, push notifications (FCM/APNs), in-app, and webhooks.
-72. The system shall allow users to configure notification preferences per category (security, billing, uploads, system).
-73. The system shall support quiet hours (do not send non-critical notifications during 10 PM - 8 AM user local time).
-74. The system shall batch non-urgent notifications and send as daily digest (configurable).
+89. The system shall support notification delivery via: email, SMS, push notifications (FCM/APNs), in-app, and webhooks.
+90. The system shall allow users to configure notification preferences per category (security, billing, uploads, system).
+91. The system shall support quiet hours (do not send non-critical notifications during 10 PM - 8 AM user local time).
+92. The system shall batch non-urgent notifications and send as daily digest (configurable).
 
 #### D-2 Notification Types
 
-75. The system shall send notifications for:
+93. The system shall send notifications for:
     - **Security:** Login from new device, password changed, 2FA enabled/disabled, suspicious activity
     - **Billing:** Payment successful, payment failed, trial ending, subscription canceled, invoice available
     - **Upload:** Upload completed, validation failed, transform completed, quota warning
@@ -464,31 +480,31 @@ service NotificationService {
 
 #### D-3 Template Management
 
-76. The system shall use template engine (Handlebars/Liquid) for email/SMS bodies with variable interpolation.
-77. The system shall version templates and support A/B testing of email subject lines and content.
-78. The system shall localize templates based on user language preference (en, de, fr) with fallback to English.
-79. The system shall validate template variables before send to prevent missing data errors.
+94. The system shall use template engine (Handlebars/Liquid) for email/SMS bodies with variable interpolation.
+95. The system shall version templates and support A/B testing of email subject lines and content.
+96. The system shall localize templates based on user language preference (en, de, fr) with fallback to English.
+97. The system shall validate template variables before send to prevent missing data errors.
 
 #### D-4 Delivery & Tracking
 
-80. The system shall queue notifications in Redis/SQS with retry logic (max 3 retries with exponential backoff).
-81. The system shall track delivery status: `queued`, `sent`, `delivered`, `bounced`, `failed`, `read` (for email opens).
-82. The system shall implement email deliverability best practices: SPF, DKIM, DMARC, unsubscribe links, List-Unsubscribe header.
-83. The system shall respect user opt-outs and unsubscribe preferences (except critical security notifications).
+98. The system shall queue email/SMS/push notifications in Redis/SQS with retry logic for failed deliveries (max 3 retries with exponential backoff: 1s, 5s, 30s for email/SMS/push).
+99. The system shall track delivery status: `queued`, `sent`, `delivered`, `bounced`, `failed`, `read` (for email opens).
+100. The system shall implement email deliverability best practices: SPF, DKIM, DMARC, unsubscribe links, List-Unsubscribe header.
+101. The system shall respect user opt-outs and unsubscribe preferences (except critical security notifications).
 
 #### D-5 Webhooks
 
-84. The system shall allow tenants to register webhook endpoints for events: `user.created`, `subscription.updated`, `upload.completed`, etc.
-85. The system shall sign webhook payloads using HMAC-SHA256 with tenant-specific secret for verification.
-86. The system shall retry failed webhook deliveries up to 5 times with exponential backoff (1s, 5s, 30s, 5min, 30min).
-87. The system shall provide webhook logs with request/response payloads (truncated to 10KB) for debugging.
-88. The system shall disable webhooks after 10 consecutive failures and notify tenant admin.
+102. The system shall allow tenants to register webhook endpoints for events: `user.created`, `subscription.updated`, `upload.completed`, etc; validate URLs before registration to reject private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8), non-standard ports (except 80, 443, 8080, 8443), and follow maximum 2 redirects with re-validation.
+103. The system shall sign webhook payloads using HMAC-SHA256 with tenant-specific secret for verification.
+104. The system shall retry failed webhook deliveries up to 5 times with exponential backoff (1s, 5s, 30s, 5min, 30min) for external system tolerance.
+105. The system shall provide webhook logs with request/response payloads (truncated to 10KB) for debugging.
+106. The system shall disable webhooks after 10 consecutive failures and notify tenant admin.
 
 #### D-6 In-App Notifications
 
-89. The system shall maintain in-app notification feed with unread count and mark-as-read functionality.
-90. The system shall expire in-app notifications after 30 days and archive after 90 days.
-91. The system shall support real-time notification delivery via WebSocket with fallback to polling (30s interval).
+107. The system shall maintain in-app notification feed with unread count and mark-as-read functionality.
+108. The system shall expire in-app notifications after 30 days and archive after 90 days.
+109. The system shall support real-time notification delivery via WebSocket with fallback to polling (30s interval).
 
 ---
 
@@ -496,37 +512,37 @@ service NotificationService {
 
 #### E-1 Transactional Email System
 
-92. The system shall integrate with SendGrid/AWS SES/Postmark for transactional email delivery.
-93. The system shall support email types: verification, password reset, OTP, invoices, receipts, notifications, marketing (opt-in).
-94. The system shall enforce rate limits per email type to prevent abuse: verification (5/hour), password reset (3/hour).
-95. The system shall track email metrics: sent, delivered, opened, clicked, bounced, complained (spam).
+110. The system shall integrate with SendGrid/AWS SES/Postmark for transactional email delivery.
+111. The system shall support email types: verification, password reset, OTP, invoices, receipts, notifications, marketing (opt-in).
+112. The system shall enforce rate limits per email type to prevent abuse: verification (5/hour), password reset (3/hour).
+113. The system shall track email metrics and distinguish between hard bounces (permanent failure) and soft bounces (temporary failure); suppress future sends to hard-bounced addresses permanently; retry soft bounces up to 3 times over 72 hours; alert when bounce rate exceeds 5% for any email type; provide admin UI to manage bounce suppression list.
 
 #### E-2 Email Queue & Delivery
 
-96. The system shall queue emails in PostgreSQL with `pending`, `processing`, `sent`, `failed` states.
-97. The system shall process email queue asynchronously with worker pools (min 2, max 10 workers) scaled by queue depth.
-98. The system shall implement priority queues: `critical` (OTP, password reset), `high` (transactional), `normal` (notifications), `low` (marketing).
-99. The system shall dequeue and send emails within 30 seconds for critical, 5 minutes for high, 30 minutes for normal.
+114. The system shall queue emails in PostgreSQL with `pending`, `processing`, `sent`, `failed` states.
+115. The system shall process email queue asynchronously with worker pools (min 2, max 10 workers) scaled by queue depth.
+116. The system shall implement priority queues: `critical` (OTP, password reset), `high` (transactional), `normal` (notifications), `low` (marketing).
+117. The system shall dequeue and send emails within 30 seconds for critical, 5 minutes for high, 30 minutes for normal.
 
 #### E-3 Email Templates & Personalization
 
-100. The system shall store templates with subject, HTML body, text body (for plain-text clients), and preview text.
-101. The system shall support dynamic content insertion: user name, company name, action buttons, one-time links.
-102. The system shall automatically inline CSS for maximum email client compatibility.
-103. The system shall provide template preview and test send functionality for administrators.
+118. The system shall store templates with subject, HTML body, text body (for plain-text clients), and preview text.
+119. The system shall support dynamic content insertion: user name, company name, action buttons, one-time links.
+120. The system shall automatically inline CSS for maximum email client compatibility.
+121. The system shall provide template preview and test send functionality for administrators.
 
 #### E-4 Distributed Transaction Management
 
-104. The system shall use database transactions with proper isolation levels: `READ COMMITTED` (default), `SERIALIZABLE` (financial operations).
-105. The system shall implement saga pattern for distributed transactions spanning multiple services (payment + subscription + email).
-106. The system shall use idempotency keys for all state-changing operations to ensure exactly-once semantics.
-107. The system shall implement compensating transactions for rollback scenarios (e.g., refund on failed subscription activation).
+122. The system shall use database transactions with proper isolation levels: `READ COMMITTED` (default), `SERIALIZABLE` (financial operations).
+123. The system shall implement saga pattern for distributed transactions spanning multiple services (payment + subscription + email).
+124. The system shall use idempotency keys scoped per tenant and user for all state-changing operations to ensure exactly-once semantics; after 24-hour expiry, same key may be reused; all POST/PUT/PATCH/DELETE endpoints shall accept optional Idempotency-Key header; payment and subscription endpoints shall REQUIRE Idempotency-Key header.
+125. The system shall implement compensating transactions for rollback scenarios (e.g., refund on failed subscription activation).
 
 #### E-5 Transaction Monitoring
 
-108. The system shall log all database transactions with duration, isolation level, and affected tables.
-109. The system shall alert on long-running transactions (> 5 seconds) and deadlocks.
-110. The system shall maintain transaction audit trail for financial operations with immutable records.
+126. The system shall log all database transactions with duration, isolation level, and affected tables.
+127. The system shall alert on long-running transactions (> 5 seconds) and deadlocks.
+128. The system shall maintain transaction audit trail for financial operations with immutable records.
 
 ---
 

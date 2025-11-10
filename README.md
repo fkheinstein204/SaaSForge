@@ -3,7 +3,7 @@
 > **Production-ready, multi-tenant SaaS boilerplate that accelerates teams from prototype to launch in weeks, not months.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3-green.svg)](CHANGELOG.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ---
