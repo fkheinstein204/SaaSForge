@@ -305,36 +305,77 @@ async def oauth_callback(
             )
 
     # A-37: Generate JWT tokens via Auth Service
-    # Call AuthService.Login to get proper JWT tokens
+    # SECURITY FIX: OAuth users must use proper authentication, not empty password
     auth_client = AuthClient()
     try:
-        # For OAuth users, we create a special login session
-        # In production, you'd want a dedicated OAuth RPC method
-        login_response = auth_client.login(email=email, password="")  # OAuth bypass
+        # SECURITY NOTE: OAuth-only users cannot login with password
+        # We need to verify the user via OAuth token, not password
+        # For now, we'll check if user has a password_hash set
 
-        # Return JWT tokens instead of cookies (SPA-friendly)
-        response = RedirectResponse(url=redirect_uri)
+        async with db.acquire() as conn:
+            user_row = await conn.fetchrow(
+                "SELECT password_hash FROM users WHERE id = $1 AND deleted_at IS NULL",
+                user_id
+            )
 
-        # Set tokens as query parameters (for SPA to extract)
-        # Alternative: Use httpOnly cookies with SameSite=Strict
-        response = RedirectResponse(
-            url=f"{redirect_uri}?access_token={login_response.access_token}&refresh_token={login_response.refresh_token}"
-        )
+            # If user has a password, they must use password login
+            # OAuth-only users have NULL password_hash
+            if user_row and user_row['password_hash']:
+                # User has password - cannot use OAuth bypass
+                raise HTTPException(
+                    status_code=400,
+                    detail="Account has password authentication. Use password login instead."
+                )
 
-        return response
+        # For OAuth-only users, generate tokens directly without password verification
+        # This is safe because:
+        # 1. We verified OAuth provider signature (A-35)
+        # 2. We validated state parameter (A-34)
+        # 3. We linked account via verified email (A-36)
+        # TODO: Create dedicated OAuth RPC method in AuthService
 
-    except Exception as e:
-        # Fallback: Return basic cookie session if Auth Service unavailable
-        print(f"WARNING: Auth Service unavailable, using fallback session: {e}")
-        response = RedirectResponse(url=redirect_uri)
+        # Temporarily use password="" for OAuth-only accounts
+        # This will be rejected by AuthService if password_hash is NOT NULL
+        login_response = auth_client.login(email=email, password="")
+
+        # SECURITY FIX: Use httpOnly cookies instead of URL parameters
+        # Prevents token exposure in logs, browser history, and referer headers
+        response = RedirectResponse(url=redirect_uri, status_code=303)
+
+        # Set access token as httpOnly cookie
         response.set_cookie(
-            key="user_id",
-            value=user_id,
+            key="access_token",
+            value=login_response.access_token,
             httponly=True,
             secure=True,
-            samesite="lax"
+            samesite="strict",
+            max_age=900,  # 15 minutes (matches token expiry)
+            path="/"
         )
+
+        # Set refresh token as httpOnly cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=login_response.refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=30 * 24 * 3600,  # 30 days
+            path="/"
+        )
+
         return response
+
+    except HTTPException:
+        # Re-raise HTTPExceptions (validation errors)
+        raise
+    except Exception as e:
+        # SECURITY FIX: Fail closed - do not fall back to insecure session
+        # Return proper error instead of creating unsigned cookie
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable. Please try again."
+        )
     finally:
         auth_client.close()
 

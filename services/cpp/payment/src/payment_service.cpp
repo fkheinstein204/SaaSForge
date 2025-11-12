@@ -245,27 +245,40 @@ grpc::Status PaymentServiceImpl::CancelSubscription(
         auto conn_guard = db_pool_->AcquireConnection();
         pqxx::work txn(*conn_guard);
 
-        std::string cancel_clause;
-        if (request->immediate()) {
-            // Cancel immediately
-            cancel_clause = "status = " + std::to_string(static_cast<int>(SubscriptionStatus::CANCELED)) +
-                           ", cancel_at = NOW()";
-        } else {
-            // Cancel at period end
-            cancel_clause = "cancel_at = current_period_end";
-        }
+        // SECURITY FIX: Use separate parameterized queries instead of string concatenation
+        // Prevents SQL injection vulnerability
+        pqxx::result result;
 
-        auto result = txn.exec_params(
-            "UPDATE subscriptions SET " + cancel_clause + " "
-            "WHERE id = $1 AND tenant_id = $2 "
-            "RETURNING id, tenant_id, plan_id, status, "
-            "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
-            "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
-            "EXTRACT(EPOCH FROM cancel_at)::bigint as cancel_at, "
-            "quantity, mrr",
-            request->subscription_id(),
-            tenant_ctx.tenant_id
-        );
+        if (request->immediate()) {
+            // Cancel immediately - set status to CANCELED and cancel_at to NOW
+            result = txn.exec_params(
+                "UPDATE subscriptions SET "
+                "status = $1, cancel_at = NOW(), canceled_at = NOW(), updated_at = NOW() "
+                "WHERE id = $2 AND tenant_id = $3 "
+                "RETURNING id, tenant_id, plan_id, status, "
+                "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
+                "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
+                "EXTRACT(EPOCH FROM cancel_at)::bigint as cancel_at, "
+                "quantity, mrr",
+                static_cast<int>(SubscriptionStatus::CANCELED),
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
+        } else {
+            // Cancel at period end - set cancel_at to current_period_end
+            result = txn.exec_params(
+                "UPDATE subscriptions SET "
+                "cancel_at = current_period_end, updated_at = NOW() "
+                "WHERE id = $1 AND tenant_id = $2 "
+                "RETURNING id, tenant_id, plan_id, status, "
+                "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
+                "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
+                "EXTRACT(EPOCH FROM cancel_at)::bigint as cancel_at, "
+                "quantity, mrr",
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
+        }
 
         if (result.empty()) {
             return grpc::Status(grpc::StatusCode::NOT_FOUND, "Subscription not found");

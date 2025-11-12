@@ -33,17 +33,30 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware - SECURITY FIX: Restrict to specific methods and headers
+import os
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=allowed_origins,  # React dev server / production frontend
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # Explicit methods only
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Tenant-ID",
+        "Idempotency-Key",
+        "Accept",
+        "Origin",
+        "X-Requested-With"
+    ],  # Explicit headers only
+    expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Reset"]
 )
 
-# Security middleware
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])  # Configure in production
+# Security middleware - SECURITY FIX: Configure allowed hosts properly
+allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+if "*" not in allowed_hosts:  # Only restrict if not wildcard
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # Custom middleware
 app.add_middleware(LoggingMiddleware)

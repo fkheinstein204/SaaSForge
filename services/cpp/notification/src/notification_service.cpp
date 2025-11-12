@@ -23,6 +23,74 @@ NotificationServiceImpl::NotificationServiceImpl(
     std::cout << "NotificationService initialized" << std::endl;
 }
 
+// SECURITY: SSRF Protection - Validate webhook URLs to prevent internal network access
+bool NotificationServiceImpl::ValidateWebhookUrl(const std::string& url) {
+    // Must start with http:// or https://
+    if (url.find("http://") != 0 && url.find("https://") != 0) {
+        return false;
+    }
+
+    // Extract hostname and port
+    size_t protocol_end = url.find("://") + 3;
+    size_t host_end = url.find(":", protocol_end);
+    if (host_end == std::string::npos) {
+        host_end = url.find("/", protocol_end);
+    }
+    if (host_end == std::string::npos) {
+        host_end = url.length();
+    }
+
+    std::string host = url.substr(protocol_end, host_end - protocol_end);
+
+    // Reject localhost and loopback addresses
+    if (host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" ||
+        host == "::1" || host == "[::1]") {
+        return false;
+    }
+
+    // Reject private IP ranges (RFC 1918)
+    if (host.find("192.168.") == 0 || host.find("10.") == 0) {
+        return false;
+    }
+
+    // Check 172.16.0.0 - 172.31.255.255 range
+    if (host.find("172.") == 0) {
+        size_t second_dot = host.find(".", 4);
+        if (second_dot != std::string::npos) {
+            int second_octet = std::stoi(host.substr(4, second_dot - 4));
+            if (second_octet >= 16 && second_octet <= 31) {
+                return false;  // Private range
+            }
+        }
+    }
+
+    // Reject link-local addresses (169.254.0.0/16 - AWS metadata endpoint)
+    if (host.find("169.254.") == 0) {
+        return false;
+    }
+
+    // Validate port if specified
+    if (url[host_end] == ':') {
+        size_t port_end = url.find("/", host_end);
+        if (port_end == std::string::npos) {
+            port_end = url.length();
+        }
+
+        try {
+            int port = std::stoi(url.substr(host_end + 1, port_end - host_end - 1));
+
+            // Only allow standard web ports (prevent access to internal services)
+            if (port != 80 && port != 443 && port != 8080 && port != 8443) {
+                return false;
+            }
+        } catch (const std::exception&) {
+            return false;  // Invalid port number
+        }
+    }
+
+    return true;
+}
+
 grpc::Status NotificationServiceImpl::SendEmail(
     grpc::ServerContext* context,
     const SendEmailRequest* request,
@@ -354,9 +422,14 @@ grpc::Status NotificationServiceImpl::RegisterWebhook(
             return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "Authentication required");
         }
 
-        // Validate webhook URL (basic validation)
-        if (request->url().empty() || request->url().find("http") != 0) {
-            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Invalid webhook URL");
+        // SECURITY FIX: Comprehensive SSRF protection
+        if (request->url().empty()) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Webhook URL cannot be empty");
+        }
+
+        if (!ValidateWebhookUrl(request->url())) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                              "Invalid webhook URL: Cannot access private networks, localhost, or non-standard ports");
         }
 
         // Convert repeated events to comma-separated string

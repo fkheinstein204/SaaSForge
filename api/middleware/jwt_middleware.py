@@ -152,10 +152,21 @@ class JWTMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"}
             )
         except redis.RedisError as e:
-            # Redis connection failure - log but don't block request (fail open for availability)
-            # In production, consider failing closed for security
-            print(f"WARN: Redis blacklist check failed: {e}")
-            # Continue with request (token validated, but blacklist not checked)
+            # SECURITY FIX: Fail closed on Redis errors in production
+            # Redis blacklist is critical for token revocation (logout, password reset)
+            environment = os.getenv("ENVIRONMENT", "development")
+
+            if environment == "production":
+                # Fail closed - deny request if blacklist unavailable
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication service temporarily unavailable. Please try again.",
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
+            else:
+                # Development: Fail open with warning
+                print(f"WARN: Redis blacklist check failed in {environment}: {e}")
+                # Continue with request (token validated, but blacklist not checked)
 
         response = await call_next(request)
         return response

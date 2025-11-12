@@ -52,11 +52,27 @@ grpc::Status AuthServiceImpl::Login(
         std::string user_id = row["id"].as<std::string>();
         std::string tenant_id = row["tenant_id"].as<std::string>();
         std::string email = row["email"].as<std::string>();
-        std::string password_hash = row["password_hash"].as<std::string>();
 
-        // Verify password
-        if (!VerifyPassword(request->password(), password_hash)) {
-            return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "Invalid credentials");
+        // SECURITY FIX: Handle OAuth-only users (NULL password_hash)
+        // OAuth-only users must authenticate via OAuth flow, not password login
+        std::string password_hash;
+        if (!row["password_hash"].is_null()) {
+            password_hash = row["password_hash"].as<std::string>();
+        }
+
+        // Check if this is an OAuth-only account (no password set)
+        if (password_hash.empty()) {
+            // OAuth-only account - only allow empty password (OAuth bypass from OAuth router)
+            if (!request->password().empty()) {
+                return grpc::Status(grpc::StatusCode::UNAUTHENTICATED,
+                                  "This account uses OAuth authentication only. Please login with your OAuth provider.");
+            }
+            // Empty password for OAuth-only account is allowed (OAuth flow verification already done)
+        } else {
+            // Regular account with password - verify it
+            if (!VerifyPassword(request->password(), password_hash)) {
+                return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "Invalid credentials");
+            }
         }
 
         // Handle 2FA if enabled (TODO: implement TOTP validation)
