@@ -73,3 +73,16 @@ architect:
     observability: true
     statelessness: true
   architecture_rules: .agents/architect/ARCHITECTURE_RULES.md
+
+cicd:
+  enabled: true
+  severity_threshold: medium  # low, medium, high, critical
+  fail_on_critical: true
+  checks:
+    workflow_security: true
+    action_pinning: true
+    secrets_exposure: true
+    deployment_safety: true
+    kubernetes_best_practices: true
+    docker_security: true
+  rules_document: .agents/cicd/CICD_RULES.md

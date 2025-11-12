@@ -110,10 +110,54 @@ jobs:
       - name: Run Testing Agent
         run: python3 .agents/testing/review.py tests/
 
+  cicd-agent:
+    name: 🚀 CI/CD Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history to detect changed files
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Get list of changed files in this PR
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} > changed_files.txt
+          else
+            git diff --name-only HEAD~1 HEAD > changed_files.txt
+          fi
+
+          # Check if any CI/CD files changed
+          if grep -qE '\.github/workflows/|^k8s/|^docker/|Dockerfile|docker-compose' changed_files.txt; then
+            echo "cicd_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "cicd_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run CI/CD Agent
+        if: steps.changed-files.outputs.cicd_changed == 'true'
+        run: python3 .agents/cicd/review.py .
+
+      - name: Skip CI/CD Agent
+        if: steps.changed-files.outputs.cicd_changed == 'false'
+        run: |
+          echo "ℹ️  No CI/CD files changed, skipping review"
+          echo "## 🚀 CI/CD Agent - Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No workflow, Kubernetes, or Docker files were modified in this PR." >> $GITHUB_STEP_SUMMARY
+
   agent-summary:
     name: 📊 Agent Summary
     runs-on: ubuntu-latest
-    needs: [security-agent, architecture-agent, architect-agent, performance-agent, database-agent, testing-agent]
+    needs: [security-agent, architecture-agent, architect-agent, performance-agent, database-agent, testing-agent, cicd-agent]
     if: always()
     steps:
       - name: Summary

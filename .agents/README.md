@@ -1,6 +1,6 @@
 # SaaSForge Review Agents
 
-Seven specialized agents to review and validate code changes against project requirements.
+Eight specialized agents to review and validate code changes against project requirements.
 
 ## 🔐 1. Security Review Agent
 **Focus:** JWT, mTLS, multi-tenancy isolation, OWASP compliance
@@ -87,6 +87,55 @@ Seven specialized agents to review and validate code changes against project req
 - Communication patterns (sync vs async)
 - Resilience patterns (retry, circuit breaker)
 - Observability (logging, metrics, tracing)
+
+## 🚀 8. CI/CD Review Agent
+**Focus:** GitHub Actions workflows, Kubernetes manifests, Dockerfiles, deployment configurations
+
+**Run:** `python .agents/cicd/review.py <path>`
+
+**Checks:**
+- **GitHub Actions Security (10 checks)**
+  - Workflow permissions (least privilege)
+  - Action pinning (SHA-256 vs tags)
+  - Hardcoded secrets detection
+  - Timeout values
+  - Self-hosted runner security for PRs
+  - pull_request_target safety
+  - Concurrency control
+  - Dangerous shell commands
+  - Deployment job protection
+- **Docker Security (10 checks)**
+  - Vulnerable base images (EOL detection)
+  - Running as root (USER directive)
+  - Hardcoded secrets in layers
+  - Multi-stage builds
+  - HEALTHCHECK presence
+  - :latest tag usage
+  - Package manager cleanup
+  - Layer cache optimization
+  - Privileged containers
+- **Kubernetes Security (10 checks)**
+  - Resource limits/requests
+  - Health probes (liveness, readiness)
+  - Privileged containers
+  - runAsNonRoot security context
+  - Tenant isolation labels
+  - ConfigMap/Secret usage
+  - Namespace specification
+  - hostPath volumes
+  - PodDisruptionBudget
+  - imagePullPolicy
+- **Docker Compose (4 checks)**
+  - Privileged mode
+  - Hardcoded secrets
+  - Health checks
+  - Image tags
+- **Kustomize (3 checks)**
+  - Namespace specification
+  - Common labels
+  - Image digests
+
+**Total: 37 checks** | **Reference:** `.agents/cicd/CICD_RULES.md`
 
 ## Usage
 
