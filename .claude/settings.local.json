@@ -12,7 +12,15 @@
       "Bash(dpkg:*)",
       "Bash(cat:*)",
       "Bash(git push:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(python3 -m alembic:*)",
+      "Bash(python3:*)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(alembic init:*)",
+      "Bash(. venv/bin/activate)",
+      "Bash(alembic revision:*)",
+      "Bash(psql:*)"
     ],
     "deny": [],
     "ask": []

@@ -129,41 +129,83 @@ grpc::Status PaymentServiceImpl::UpdateSubscription(
         auto conn_guard = db_pool_->AcquireConnection();
         pqxx::work txn(*conn_guard);
 
-        // Build dynamic UPDATE query
-        std::stringstream update_query;
-        update_query << "UPDATE subscriptions SET ";
-        std::vector<std::string> updates;
+        // SECURITY FIX: Use parameterized queries instead of dynamic query building
+        // Refactored to use exec_params() with proper parameter binding
 
-        if (request->has_plan_id()) {
-            updates.push_back("plan_id = " + txn.quote(request->plan_id()));
+        pqxx::result result;
+
+        // Case 1: Update both plan_id and quantity
+        if (request->has_plan_id() && request->has_quantity()) {
+            // Get current plan_id to calculate MRR
+            std::string plan_id = request->plan_id();
+            int quantity = request->quantity();
+            double new_mrr = CalculateMRR(plan_id, quantity);
+
+            result = txn.exec_params(
+                "UPDATE subscriptions SET "
+                "plan_id = $1, quantity = $2, mrr = $3, updated_at = NOW() "
+                "WHERE id = $4 AND tenant_id = $5 "
+                "RETURNING id, tenant_id, plan_id, status, "
+                "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
+                "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
+                "quantity, mrr",
+                plan_id,
+                quantity,
+                new_mrr,
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
         }
-
-        if (request->has_quantity()) {
-            updates.push_back("quantity = " + std::to_string(request->quantity()));
-            // Recalculate MRR
-            std::string plan_id_query = request->has_plan_id() ? request->plan_id() :
-                "(SELECT plan_id FROM subscriptions WHERE id = " + txn.quote(request->subscription_id()) + ")";
-            double new_mrr = CalculateMRR(plan_id_query, request->quantity());
-            updates.push_back("mrr = " + std::to_string(new_mrr));
+        // Case 2: Update only plan_id
+        else if (request->has_plan_id()) {
+            result = txn.exec_params(
+                "UPDATE subscriptions SET "
+                "plan_id = $1, updated_at = NOW() "
+                "WHERE id = $2 AND tenant_id = $3 "
+                "RETURNING id, tenant_id, plan_id, status, "
+                "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
+                "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
+                "quantity, mrr",
+                request->plan_id(),
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
         }
+        // Case 3: Update only quantity (recalculate MRR with existing plan_id)
+        else if (request->has_quantity()) {
+            // First, get current plan_id
+            auto plan_result = txn.exec_params(
+                "SELECT plan_id FROM subscriptions WHERE id = $1 AND tenant_id = $2",
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
 
-        if (updates.empty()) {
+            if (plan_result.empty()) {
+                return grpc::Status(grpc::StatusCode::NOT_FOUND, "Subscription not found");
+            }
+
+            std::string plan_id = plan_result[0]["plan_id"].as<std::string>();
+            int quantity = request->quantity();
+            double new_mrr = CalculateMRR(plan_id, quantity);
+
+            result = txn.exec_params(
+                "UPDATE subscriptions SET "
+                "quantity = $1, mrr = $2, updated_at = NOW() "
+                "WHERE id = $3 AND tenant_id = $4 "
+                "RETURNING id, tenant_id, plan_id, status, "
+                "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
+                "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
+                "quantity, mrr",
+                quantity,
+                new_mrr,
+                request->subscription_id(),
+                tenant_ctx.tenant_id
+            );
+        }
+        // Case 4: No fields to update
+        else {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "No fields to update");
         }
-
-        for (size_t i = 0; i < updates.size(); i++) {
-            if (i > 0) update_query << ", ";
-            update_query << updates[i];
-        }
-
-        update_query << " WHERE id = " << txn.quote(request->subscription_id())
-                     << " AND tenant_id = " << txn.quote(tenant_ctx.tenant_id)
-                     << " RETURNING id, tenant_id, plan_id, status, "
-                     << "EXTRACT(EPOCH FROM current_period_start)::bigint as period_start, "
-                     << "EXTRACT(EPOCH FROM current_period_end)::bigint as period_end, "
-                     << "quantity, mrr";
-
-        auto result = txn.exec(update_query.str());
 
         if (result.empty()) {
             return grpc::Status(grpc::StatusCode::NOT_FOUND, "Subscription not found");
