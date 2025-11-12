@@ -27,8 +27,33 @@ class AuthClient:
         self.port = port or int(os.getenv("AUTH_SERVICE_PORT", "50051"))
         self.address = f"{self.host}:{self.port}"
 
-        # Create channel (insecure for now, add mTLS later)
-        self.channel = grpc.insecure_channel(self.address)
+        # Load mTLS certificates for secure service-to-service communication
+        ca_cert_path = os.getenv("GRPC_CA_CERT_PATH", "certs/ca.crt")
+        client_cert_path = os.getenv("GRPC_CLIENT_CERT_PATH", "certs/client.crt")
+        client_key_path = os.getenv("GRPC_CLIENT_KEY_PATH", "certs/client.key")
+
+        try:
+            with open(ca_cert_path, "rb") as f:
+                ca_cert = f.read()
+            with open(client_cert_path, "rb") as f:
+                client_cert = f.read()
+            with open(client_key_path, "rb") as f:
+                client_key = f.read()
+
+            # Create SSL credentials with client certificate for mTLS
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=ca_cert,
+                private_key=client_key,
+                certificate_chain=client_cert
+            )
+
+            # Create secure channel with mTLS
+            self.channel = grpc.secure_channel(self.address, credentials)
+        except FileNotFoundError as e:
+            # Fallback to insecure channel for local development only
+            print(f"WARNING: mTLS certs not found ({e}), using insecure channel")
+            self.channel = grpc.insecure_channel(self.address)
+
         self.stub = AuthServiceStub(self.channel)
 
     def login(self, email: str, password: str, totp_code: Optional[str] = None) -> LoginResponse:

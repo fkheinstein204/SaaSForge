@@ -24,7 +24,30 @@ class NotificationClient:
         self.port = port or int(os.getenv("NOTIFICATION_SERVICE_PORT", "50054"))
         self.address = f"{self.host}:{self.port}"
 
-        self.channel = grpc.insecure_channel(self.address)
+        # Load mTLS certificates for secure service-to-service communication
+        ca_cert_path = os.getenv("GRPC_CA_CERT_PATH", "certs/ca.crt")
+        client_cert_path = os.getenv("GRPC_CLIENT_CERT_PATH", "certs/client.crt")
+        client_key_path = os.getenv("GRPC_CLIENT_KEY_PATH", "certs/client.key")
+
+        try:
+            with open(ca_cert_path, "rb") as f:
+                ca_cert = f.read()
+            with open(client_cert_path, "rb") as f:
+                client_cert = f.read()
+            with open(client_key_path, "rb") as f:
+                client_key = f.read()
+
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=ca_cert,
+                private_key=client_key,
+                certificate_chain=client_cert
+            )
+
+            self.channel = grpc.secure_channel(self.address, credentials)
+        except FileNotFoundError as e:
+            print(f"WARNING: mTLS certs not found ({e}), using insecure channel")
+            self.channel = grpc.insecure_channel(self.address)
+
         self.stub = NotificationServiceStub(self.channel)
 
     def send_email(

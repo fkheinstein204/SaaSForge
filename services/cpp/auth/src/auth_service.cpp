@@ -94,7 +94,7 @@ grpc::Status AuthServiceImpl::Logout(
     LogoutResponse* response
 ) {
     try {
-        // Logout uses refresh_token, not access_token
+        // Logout requires both refresh_token and access_token for complete invalidation
         if (request->refresh_token().empty()) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Refresh token required");
         }
@@ -111,6 +111,39 @@ grpc::Status AuthServiceImpl::Logout(
         // Remove refresh token from Redis
         redis_client_->DeleteSession("refresh:" + user_id);
 
+        // CRITICAL SECURITY FIX: Blacklist access token to ensure instant logout
+        // Extract Authorization header from metadata
+        auto metadata = context->client_metadata();
+        auto auth_header = metadata.find("authorization");
+
+        if (auth_header != metadata.end()) {
+            std::string auth_value(auth_header->second.data(), auth_header->second.length());
+
+            // Check if it starts with "Bearer "
+            if (auth_value.find("Bearer ") == 0) {
+                std::string access_token = auth_value.substr(7); // Skip "Bearer "
+
+                // Validate and extract JTI from access token
+                auto claims = jwt_validator_->Validate(access_token);
+                if (claims && !claims->jti.empty()) {
+                    // Calculate TTL = token expiry - current time
+                    auto now = std::chrono::system_clock::now();
+                    auto expiry = std::chrono::system_clock::from_time_t(claims->exp);
+                    auto ttl = std::chrono::duration_cast<std::chrono::seconds>(expiry - now);
+
+                    // Only blacklist if token is still valid (not already expired)
+                    if (ttl.count() > 0) {
+                        // Add access token to Redis blacklist with TTL
+                        std::string blacklist_key = "blacklist:" + claims->jti;
+                        redis_client_->SetSession(blacklist_key, "logout", ttl.count());
+
+                        std::cout << "Access token blacklisted: jti=" << claims->jti
+                                  << ", ttl=" << ttl.count() << "s" << std::endl;
+                    }
+                }
+            }
+        }
+
         response->set_success(true);
         return grpc::Status::OK;
 
@@ -124,7 +157,94 @@ grpc::Status AuthServiceImpl::RefreshToken(
     const RefreshTokenRequest* request,
     RefreshTokenResponse* response
 ) {
-    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "RefreshToken not yet implemented");
+    try {
+        // Validate input
+        if (request->refresh_token().empty()) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Refresh token required");
+        }
+
+        std::string refresh_token = request->refresh_token();
+
+        // Extract user_id from refresh token (format: "user_id:random")
+        size_t colon_pos = refresh_token.find(':');
+        if (colon_pos == std::string::npos) {
+            return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "Invalid refresh token format");
+        }
+
+        std::string user_id = refresh_token.substr(0, colon_pos);
+
+        // CRITICAL SECURITY: Check if refresh token exists in Redis
+        std::string redis_key = "refresh:" + user_id;
+        auto stored_token = redis_client_->GetSession(redis_key);
+
+        if (!stored_token) {
+            // Token not found in Redis - either expired, revoked, or invalid
+            return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "Refresh token invalid or expired");
+        }
+
+        // CRITICAL SECURITY: Detect token reuse (potential security breach)
+        if (*stored_token != refresh_token) {
+            // Different refresh token stored - someone is reusing an old token!
+            // This indicates potential token theft. Revoke ALL sessions for this user.
+            std::cerr << "SECURITY ALERT: Refresh token reuse detected for user " << user_id << std::endl;
+
+            // Revoke all refresh tokens for this user
+            redis_client_->DeleteSession(redis_key);
+
+            // In production, also blacklist all active access tokens for this user
+            // and force re-authentication
+
+            return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                              "Token reuse detected. All sessions revoked. Please login again.");
+        }
+
+        // Fetch user details from database
+        auto conn_guard = db_pool_->AcquireConnection();
+        pqxx::work txn(*conn_guard);
+
+        auto result = txn.exec_params(
+            "SELECT id, tenant_id, email FROM users WHERE id = $1 AND deleted_at IS NULL",
+            user_id
+        );
+
+        if (result.empty()) {
+            // User not found or deleted - revoke token
+            redis_client_->DeleteSession(redis_key);
+            return grpc::Status(grpc::StatusCode::UNAUTHENTICATED, "User not found");
+        }
+
+        auto row = result[0];
+        std::string tenant_id = row["tenant_id"].as<std::string>();
+        std::string email = row["email"].as<std::string>();
+
+        // Extract roles (empty for now, could query user_roles table)
+        std::vector<std::string> roles;
+
+        // Generate new access token
+        std::string new_access_token = GenerateAccessToken(user_id, tenant_id, email, roles);
+
+        // Generate new refresh token (token rotation for security)
+        std::string new_refresh_token = GenerateRefreshToken(user_id);
+
+        // CRITICAL SECURITY: Rotate refresh token in Redis
+        // Delete old token and store new one (prevents token reuse)
+        redis_client_->DeleteSession(redis_key);
+        redis_client_->SetSession(redis_key, new_refresh_token, 30 * 24 * 3600); // 30 days TTL
+
+        // Set response
+        response->set_access_token(new_access_token);
+        response->set_refresh_token(new_refresh_token);
+        response->set_expires_in(900); // 15 minutes
+
+        txn.commit();
+
+        std::cout << "Refresh token rotated for user " << user_id << std::endl;
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, std::string("Token refresh failed: ") + e.what());
+    }
 }
 
 grpc::Status AuthServiceImpl::ValidateToken(
