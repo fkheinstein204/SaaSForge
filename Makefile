@@ -18,12 +18,16 @@ certs: ## Generate self-signed mTLS certificates (dev only)
 	@echo "Generating certificates..."
 	@./scripts/gen-certs.sh
 
+install-cpp-deps: ## Install C++ dependencies (jwt-cpp, redis++)
+	@echo "Installing C++ dependencies..."
+	@./scripts/install-cpp-deps.sh
+
 build-cpp: proto ## Build C++ services
 	@echo "Building C++ services..."
 	cd services/cpp && \
 	mkdir -p build && \
 	cd build && \
-	cmake -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake .. && \
+	cmake .. && \
 	make -j$$(nproc)
 
 build-api: ## Build FastAPI (install dependencies)

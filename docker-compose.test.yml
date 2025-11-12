@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  test_postgres:
+    image: postgres:15-alpine
+    container_name: saasforge_test_postgres
+    environment:
+      POSTGRES_DB: test_saasforge
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5433:5432"  # Different port to avoid conflict with dev DB
+    volumes:
+      - ./db/test_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d test_saasforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  test_redis:
+    image: redis:7-alpine
+    container_name: saasforge_test_redis
+    ports:
+      - "6380:6379"  # Different port to avoid conflict with dev Redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  default:
+    name: saasforge_test_network

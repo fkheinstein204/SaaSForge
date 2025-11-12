@@ -5,7 +5,13 @@
       "Bash(git add:*)",
       "Bash(tree:*)",
       "Bash(chmod:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(make:*)",
+      "Bash(pip3 install:*)",
+      "Bash(pkg-config:*)",
+      "Bash(dpkg:*)",
+      "Bash(cat:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

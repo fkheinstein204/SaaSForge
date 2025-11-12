@@ -3,6 +3,8 @@ add_library(common STATIC
     src/redis_client.cpp
     src/mtls_credentials.cpp
     src/tenant_context.cpp
+    src/db_pool.cpp
+    src/password_hasher.cpp
 )
 
 target_include_directories(common PUBLIC
@@ -13,7 +15,20 @@ target_link_libraries(common PUBLIC
     gRPC::grpc++
     jwt-cpp::jwt-cpp
     redis++::redis++
+    libpqxx::pqxx
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Threads::Threads
+    argon2  # Password hashing library
 )
+
+# Enable warnings for our code
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(common PRIVATE
+        -Wall -Wextra -Wpedantic
+        -Wno-unused-parameter
+    )
+endif()
 
 # Common tests
 add_executable(common_test

@@ -11,6 +11,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U saasforge"]
       interval: 10s
@@ -30,80 +31,134 @@ services:
       timeout: 3s
       retries: 5
 
-  # C++ gRPC services (uncomment after building)
-  # auth-service:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/auth.Dockerfile
-  #   ports:
-  #     - "50051:50051"
-  #   depends_on:
-  #     - postgres
-  #     - redis
-  #   environment:
-  #     DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
-  #     REDIS_URL: redis://redis:6379
+  # C++ gRPC services
+  auth-service:
+    build:
+      context: ./services/cpp
+      dockerfile: ../../docker/auth.Dockerfile
+    ports:
+      - "50051:50051"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+      REDIS_URL: tcp://redis:6379
+      JWT_PUBLIC_KEY_PATH: /app/certs/jwt-public.pem
+      JWT_PRIVATE_KEY_PATH: /app/certs/jwt-private.pem
+      CA_CERT_PATH: /app/certs/ca.crt
+      SERVER_CERT_PATH: /app/certs/auth-service.crt
+      SERVER_KEY_PATH: /app/certs/auth-service.key
+    volumes:
+      - ./services/cpp/certs:/app/certs:ro
 
-  # upload-service:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/upload.Dockerfile
-  #   ports:
-  #     - "50052:50052"
-  #   depends_on:
-  #     - postgres
-  #     - redis
+  upload-service:
+    build:
+      context: ./services/cpp
+      dockerfile: ../../docker/upload.Dockerfile
+    ports:
+      - "50052:50052"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+      REDIS_URL: tcp://redis:6379
+      S3_BUCKET: saasforge-uploads-dev
+      S3_REGION: us-east-1
+      CA_CERT_PATH: /app/certs/ca.crt
+      SERVER_CERT_PATH: /app/certs/upload-service.crt
+      SERVER_KEY_PATH: /app/certs/upload-service.key
+    volumes:
+      - ./services/cpp/certs:/app/certs:ro
 
-  # payment-service:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/payment.Dockerfile
-  #   ports:
-  #     - "50053:50053"
-  #   depends_on:
-  #     - postgres
-  #     - redis
+  payment-service:
+    build:
+      context: ./services/cpp
+      dockerfile: ../../docker/payment.Dockerfile
+    ports:
+      - "50053:50053"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+      REDIS_URL: tcp://redis:6379
+      STRIPE_SECRET_KEY: sk_test_mock
+      STRIPE_WEBHOOK_SECRET: whsec_mock
+      CA_CERT_PATH: /app/certs/ca.crt
+      SERVER_CERT_PATH: /app/certs/payment-service.crt
+      SERVER_KEY_PATH: /app/certs/payment-service.key
+    volumes:
+      - ./services/cpp/certs:/app/certs:ro
 
-  # notification-service:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/notification.Dockerfile
-  #   ports:
-  #     - "50054:50054"
-  #   depends_on:
-  #     - postgres
-  #     - redis
+  notification-service:
+    build:
+      context: ./services/cpp
+      dockerfile: ../../docker/notification.Dockerfile
+    ports:
+      - "50054:50054"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+      REDIS_URL: tcp://redis:6379
+      SENDGRID_API_KEY: sg_mock
+      TWILIO_ACCOUNT_SID: AC_mock
+      TWILIO_AUTH_TOKEN: auth_mock
+      FCM_SERVER_KEY: fcm_mock
+      CA_CERT_PATH: /app/certs/ca.crt
+      SERVER_CERT_PATH: /app/certs/notification-service.crt
+      SERVER_KEY_PATH: /app/certs/notification-service.key
+    volumes:
+      - ./services/cpp/certs:/app/certs:ro
 
-  # FastAPI BFF (uncomment after implementation)
-  # api:
-  #   build:
-  #     context: ./api
-  #     dockerfile: ../docker/api.Dockerfile
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     - auth-service
-  #     - upload-service
-  #     - payment-service
-  #     - notification-service
-  #   environment:
-  #     DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
-  #     REDIS_URL: redis://redis:6379
-  #   volumes:
-  #     - ./api:/app
-
-  # React UI (uncomment after implementation)
-  # ui:
-  #   build:
-  #     context: ./ui
-  #     dockerfile: ../docker/ui.Dockerfile
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - api
-  #   volumes:
-  #     - ./ui:/app
-  #     - /app/node_modules
+  # FastAPI BFF
+  api:
+    build:
+      context: ./api
+      dockerfile: ../docker/api.Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      auth-service:
+        condition: service_started
+      upload-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
+      REDIS_URL: redis://redis:6379
+      AUTH_SERVICE_HOST: auth-service
+      AUTH_SERVICE_PORT: 50051
+      UPLOAD_SERVICE_HOST: upload-service
+      UPLOAD_SERVICE_PORT: 50052
+      PAYMENT_SERVICE_HOST: payment-service
+      PAYMENT_SERVICE_PORT: 50053
+      NOTIFICATION_SERVICE_HOST: notification-service
+      NOTIFICATION_SERVICE_PORT: 50054
+      # OAuth credentials (use real values in .env)
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+    volumes:
+      - ./api:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   postgres_data:

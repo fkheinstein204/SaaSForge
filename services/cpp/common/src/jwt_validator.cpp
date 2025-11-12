@@ -4,10 +4,11 @@
 namespace saasforge {
 namespace common {
 
-JwtValidator::JwtValidator(const std::string& public_key_pem)
+JwtValidator::JwtValidator(const std::string& public_key_pem, std::shared_ptr<RedisClient> redis_client)
     : verifier_(jwt::verify()
         .allow_algorithm(jwt::algorithm::rs256{public_key_pem})
-        .with_issuer("saasforge")) {
+        .with_issuer("saasforge")),
+      redis_client_(redis_client) {
 }
 
 std::optional<TokenClaims> JwtValidator::Validate(const std::string& token) {
@@ -26,6 +27,24 @@ std::optional<TokenClaims> JwtValidator::Validate(const std::string& token) {
         claims.exp = decoded.get_expires_at().time_since_epoch().count();
         claims.iat = decoded.get_issued_at().time_since_epoch().count();
 
+        // Extract roles array if present (optional field)
+        try {
+            if (decoded.has_payload_claim("roles")) {
+                auto roles_claim = decoded.get_payload_claim("roles");
+                auto roles_json = roles_claim.to_json();
+                if (roles_json.is<picojson::array>()) {
+                    auto roles_array = roles_json.get<picojson::array>();
+                    for (const auto& role : roles_array) {
+                        if (role.is<std::string>()) {
+                            claims.roles.push_back(role.get<std::string>());
+                        }
+                    }
+                }
+            }
+        } catch (...) {
+            // Roles claim is optional, ignore parse errors
+        }
+
         // Check blacklist
         if (IsBlacklisted(claims.jti)) {
             return std::nullopt;
@@ -40,8 +59,10 @@ std::optional<TokenClaims> JwtValidator::Validate(const std::string& token) {
 }
 
 bool JwtValidator::IsBlacklisted(const std::string& jti) {
-    // TODO: Implement Redis blacklist check
-    return false;
+    if (!redis_client_) {
+        return false; // If no Redis client, skip blacklist check
+    }
+    return redis_client_->IsTokenBlacklisted(jti);
 }
 
 } // namespace common

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import uvicorn
 
-from routers import auth, upload, payment, notification
+from routers import auth, upload, payment, notification, oauth
 from middleware.jwt_middleware import JWTMiddleware
 from middleware.rate_limit_middleware import RateLimitMiddleware
 from middleware.logging_middleware import LoggingMiddleware
@@ -52,6 +52,7 @@ app.add_middleware(JWTMiddleware)
 
 # Include routers
 app.include_router(auth.router, prefix="/v1/auth", tags=["authentication"])
+app.include_router(oauth.router, prefix="/v1", tags=["oauth"])  # OAuth 2.0/OIDC
 app.include_router(upload.router, prefix="/v1/uploads", tags=["uploads"])
 app.include_router(payment.router, prefix="/v1/payments", tags=["payments"])
 app.include_router(notification.router, prefix="/v1/notifications", tags=["notifications"])
