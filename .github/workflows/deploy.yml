@@ -1,0 +1,476 @@
+name: Build & Deploy
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  release:
+    types: [published]
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  DOCKER_HUB_NAMESPACE: ${{ secrets.DOCKER_HUB_NAMESPACE || github.repository_owner }}
+
+jobs:
+  # Build and push Docker images with local registry + Docker Hub fallback
+  build-images:
+    name: Build & Push ${{ matrix.service }}
+    runs-on: ${{ (github.event_name == 'push' && 'self-hosted') || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, upload, payment, notification, api, ui]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine registry and runner type
+        id: setup
+        run: |
+          # Detect if running on self-hosted runner
+          if [[ "${{ runner.name }}" == nuc-* ]]; then
+            echo "is-self-hosted=true" >> $GITHUB_OUTPUT
+            echo "cache-dir=/srv/cache/docker" >> $GITHUB_OUTPUT
+
+            # Check if local registry is available
+            if curl -f http://localhost:5000/v2/ 2>/dev/null; then
+              echo "registry=localhost:5000" >> $GITHUB_OUTPUT
+              echo "using-local=true" >> $GITHUB_OUTPUT
+              echo "Using local Docker registry at localhost:5000"
+            else
+              echo "registry=docker.io" >> $GITHUB_OUTPUT
+              echo "using-local=false" >> $GITHUB_OUTPUT
+              echo "Local registry unavailable, falling back to Docker Hub"
+            fi
+          else
+            echo "is-self-hosted=false" >> $GITHUB_OUTPUT
+            echo "cache-dir=$HOME/.cache/docker" >> $GITHUB_OUTPUT
+            echo "registry=docker.io" >> $GITHUB_OUTPUT
+            echo "using-local=false" >> $GITHUB_OUTPUT
+            echo "Using Docker Hub (GitHub-hosted runner)"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Log in to Docker Hub
+        if: steps.setup.outputs.using-local == 'false'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SERVICE="${{ matrix.service }}"
+          REGISTRY="${{ steps.setup.outputs.registry }}"
+          NAMESPACE="${{ env.DOCKER_HUB_NAMESPACE }}"
+
+          # Determine tags based on event type
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            # Production release: v1.2.3 → saasforge-auth:1.2.3, :1.2, :1, :latest
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION_CLEAN="${VERSION#v}"  # Remove 'v' prefix
+            MAJOR=$(echo $VERSION_CLEAN | cut -d. -f1)
+            MINOR=$(echo $VERSION_CLEAN | cut -d. -f2)
+
+            if [[ "${{ steps.setup.outputs.using-local }}" == "true" ]]; then
+              TAGS="${REGISTRY}/saasforge-${SERVICE}:${VERSION_CLEAN}"
+              TAGS="${TAGS},${REGISTRY}/saasforge-${SERVICE}:${MAJOR}.${MINOR}"
+              TAGS="${TAGS},${REGISTRY}/saasforge-${SERVICE}:${MAJOR}"
+              TAGS="${TAGS},${REGISTRY}/saasforge-${SERVICE}:latest"
+            else
+              TAGS="${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:${VERSION_CLEAN}"
+              TAGS="${TAGS},${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:${MAJOR}.${MINOR}"
+              TAGS="${TAGS},${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:${MAJOR}"
+              TAGS="${TAGS},${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:latest"
+            fi
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Staging: main branch → saasforge-auth:staging, :main-SHA
+            SHA_SHORT=$(git rev-parse --short HEAD)
+            if [[ "${{ steps.setup.outputs.using-local }}" == "true" ]]; then
+              TAGS="${REGISTRY}/saasforge-${SERVICE}:staging"
+              TAGS="${TAGS},${REGISTRY}/saasforge-${SERVICE}:main-${SHA_SHORT}"
+            else
+              TAGS="${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:staging"
+              TAGS="${TAGS},${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:main-${SHA_SHORT}"
+            fi
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            # Development: develop branch → saasforge-auth:develop, :dev-SHA
+            SHA_SHORT=$(git rev-parse --short HEAD)
+            if [[ "${{ steps.setup.outputs.using-local }}" == "true" ]]; then
+              TAGS="${REGISTRY}/saasforge-${SERVICE}:develop"
+              TAGS="${TAGS},${REGISTRY}/saasforge-${SERVICE}:dev-${SHA_SHORT}"
+            else
+              TAGS="${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:develop"
+              TAGS="${TAGS},${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:dev-${SHA_SHORT}"
+            fi
+          else
+            # PR preview: pr-123-SHA
+            SHA_SHORT=$(git rev-parse --short HEAD)
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            if [[ "${{ steps.setup.outputs.using-local }}" == "true" ]]; then
+              TAGS="${REGISTRY}/saasforge-${SERVICE}:pr-${PR_NUMBER}-${SHA_SHORT}"
+            else
+              TAGS="${REGISTRY}/${NAMESPACE}/saasforge-${SERVICE}:pr-${PR_NUMBER}-${SHA_SHORT}"
+            fi
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "Generated tags: ${TAGS}"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/${{ matrix.service }}.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=local,src=${{ steps.setup.outputs.cache-dir }}/${{ matrix.service }}
+          cache-to: type=local,dest=${{ steps.setup.outputs.cache-dir }}/${{ matrix.service }},mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.event.release.tag_name || github.ref_name }}
+          labels: |
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+
+      - name: Generate SBOM (CycloneDX)
+        if: github.event_name == 'push' || github.event_name == 'release'
+        run: |
+          # Install syft for SBOM generation
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+          # Extract first tag for SBOM generation
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | cut -d',' -f1)
+
+          # Generate SBOM
+          syft "${IMAGE_TAG}" -o cyclonedx-json > sbom-${{ matrix.service }}.json
+
+          echo "SBOM generated for ${IMAGE_TAG}"
+
+      - name: Scan image for vulnerabilities
+        if: github.event_name == 'push' || github.event_name == 'release'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        if: github.event_name == 'push' || github.event_name == 'release'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-${{ matrix.service }}.sarif'
+
+  # Deploy to development (PR preview)
+  deploy-preview:
+    name: Deploy PR Preview
+    needs: build-images
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    environment:
+      name: preview-pr-${{ github.event.pull_request.number }}
+      url: https://pr-${{ github.event.pull_request.number }}.dev.saasforge.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_DEV }}" > kubeconfig.yaml
+          export KUBECONFIG=kubeconfig.yaml
+
+      - name: Create preview namespace
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+          NAMESPACE="saasforge-pr-${{ github.event.pull_request.number }}"
+
+          kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace ${NAMESPACE} environment=preview pr=${{ github.event.pull_request.number }}
+
+      - name: Deploy to preview environment
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+          NAMESPACE="saasforge-pr-${{ github.event.pull_request.number }}"
+          SHA_SHORT=$(git rev-parse --short HEAD)
+
+          # Use Kustomize with dynamic image tags
+          cd k8s/overlays/preview
+          kustomize edit set namespace ${NAMESPACE}
+          kustomize edit set image \
+            auth-service=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-auth:pr-${{ github.event.pull_request.number }}-${SHA_SHORT} \
+            upload-service=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-upload:pr-${{ github.event.pull_request.number }}-${SHA_SHORT} \
+            payment-service=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-payment:pr-${{ github.event.pull_request.number }}-${SHA_SHORT} \
+            notification-service=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-notification:pr-${{ github.event.pull_request.number }}-${SHA_SHORT} \
+            api=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-api:pr-${{ github.event.pull_request.number }}-${SHA_SHORT} \
+            ui=${{ env.DOCKER_HUB_NAMESPACE }}/saasforge-ui:pr-${{ github.event.pull_request.number }}-${SHA_SHORT}
+
+          kubectl apply -k .
+
+      - name: Wait for rollout
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+          NAMESPACE="saasforge-pr-${{ github.event.pull_request.number }}"
+
+          kubectl rollout status deployment/api -n ${NAMESPACE} --timeout=5m
+          kubectl rollout status deployment/ui -n ${NAMESPACE} --timeout=5m
+
+      - name: Run smoke tests
+        run: |
+          PREVIEW_URL="https://pr-${{ github.event.pull_request.number }}.dev.saasforge.io"
+
+          # Create smoke test if it doesn't exist
+          if [ ! -f "scripts/smoke-test.sh" ]; then
+            cat > scripts/smoke-test.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          set -e
+
+          BASE_URL="$1"
+
+          echo "Running smoke tests against ${BASE_URL}..."
+
+          # Health check
+          echo "✓ Checking /health endpoint..."
+          curl -f "${BASE_URL}/health" | grep -q "healthy"
+
+          # API docs
+          echo "✓ Checking /docs endpoint..."
+          curl -f "${BASE_URL}/docs" > /dev/null
+
+          echo "✅ All smoke tests passed"
+          EOFSCRIPT
+            chmod +x scripts/smoke-test.sh
+          fi
+
+          ./scripts/smoke-test.sh "${PREVIEW_URL}"
+
+      - name: Comment PR with preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              body: `## 🚀 Preview Deployment Ready\n\n**URL:** https://pr-${{ github.event.pull_request.number }}.dev.saasforge.io\n\n✅ All smoke tests passed`
+            })
+
+  # Deploy to staging (main branch)
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build-images
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging.saasforge.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" > kubeconfig.yaml
+          export KUBECONFIG=kubeconfig.yaml
+
+      - name: Run database migrations
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          # Run Alembic migrations via kubectl exec
+          kubectl exec -n saasforge-staging deployment/api -- \
+            python -m alembic upgrade head
+
+      - name: Deploy to Kubernetes
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          cd k8s/overlays/staging
+          kubectl apply -k .
+
+      - name: Wait for rollout
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          kubectl rollout status deployment/auth-service -n saasforge-staging --timeout=10m
+          kubectl rollout status deployment/upload-service -n saasforge-staging --timeout=10m
+          kubectl rollout status deployment/payment-service -n saasforge-staging --timeout=10m
+          kubectl rollout status deployment/notification-service -n saasforge-staging --timeout=10m
+          kubectl rollout status deployment/api -n saasforge-staging --timeout=10m
+          kubectl rollout status deployment/ui -n saasforge-staging --timeout=10m
+
+      - name: Run smoke tests
+        id: smoke
+        run: |
+          if [ ! -f "scripts/smoke-test.sh" ]; then
+            cat > scripts/smoke-test.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          set -e
+
+          BASE_URL="$1"
+
+          echo "Running smoke tests against ${BASE_URL}..."
+
+          # Health check
+          echo "✓ Checking /health endpoint..."
+          curl -f "${BASE_URL}/health" | grep -q "healthy"
+
+          # API docs
+          echo "✓ Checking /docs endpoint..."
+          curl -f "${BASE_URL}/docs" > /dev/null
+
+          echo "✅ All smoke tests passed"
+          EOFSCRIPT
+            chmod +x scripts/smoke-test.sh
+          fi
+
+          ./scripts/smoke-test.sh "https://staging.saasforge.io"
+
+      - name: Rollback on failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          echo "❌ Smoke tests failed, rolling back..."
+          kubectl rollout undo deployment/auth-service -n saasforge-staging
+          kubectl rollout undo deployment/upload-service -n saasforge-staging
+          kubectl rollout undo deployment/payment-service -n saasforge-staging
+          kubectl rollout undo deployment/notification-service -n saasforge-staging
+          kubectl rollout undo deployment/api -n saasforge-staging
+          kubectl rollout undo deployment/ui -n saasforge-staging
+
+  # Deploy to production (releases)
+  deploy-production:
+    name: Deploy to Production
+    needs: build-images
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    environment:
+      name: production
+      url: https://saasforge.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" > kubeconfig.yaml
+          export KUBECONFIG=kubeconfig.yaml
+
+      - name: Create database backup
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          # Trigger backup job
+          kubectl create job -n saasforge-prod \
+            "backup-pre-deploy-$(date +%Y%m%d-%H%M%S)" \
+            --from=cronjob/postgres-backup
+
+      - name: Run database migrations
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          # Run Alembic migrations
+          kubectl exec -n saasforge-prod deployment/api -- \
+            python -m alembic upgrade head
+
+      - name: Deploy to Kubernetes
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          cd k8s/overlays/prod
+          kubectl apply -k .
+
+      - name: Wait for rollout
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          kubectl rollout status deployment/auth-service -n saasforge-prod --timeout=15m
+          kubectl rollout status deployment/upload-service -n saasforge-prod --timeout=15m
+          kubectl rollout status deployment/payment-service -n saasforge-prod --timeout=15m
+          kubectl rollout status deployment/notification-service -n saasforge-prod --timeout=15m
+          kubectl rollout status deployment/api -n saasforge-prod --timeout=15m
+          kubectl rollout status deployment/ui -n saasforge-prod --timeout=15m
+
+      - name: Run smoke tests
+        id: smoke
+        run: |
+          if [ ! -f "scripts/smoke-test.sh" ]; then
+            cat > scripts/smoke-test.sh << 'EOFSCRIPT'
+          #!/bin/bash
+          set -e
+
+          BASE_URL="$1"
+
+          echo "Running smoke tests against ${BASE_URL}..."
+
+          # Health check
+          echo "✓ Checking /health endpoint..."
+          curl -f "${BASE_URL}/health" | grep -q "healthy"
+
+          # API docs
+          echo "✓ Checking /docs endpoint..."
+          curl -f "${BASE_URL}/docs" > /dev/null
+
+          echo "✅ All smoke tests passed"
+          EOFSCRIPT
+            chmod +x scripts/smoke-test.sh
+          fi
+
+          ./scripts/smoke-test.sh "https://saasforge.io"
+
+      - name: Rollback on failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          export KUBECONFIG=kubeconfig.yaml
+
+          echo "❌ Smoke tests failed, rolling back..."
+          kubectl rollout undo deployment/auth-service -n saasforge-prod
+          kubectl rollout undo deployment/upload-service -n saasforge-prod
+          kubectl rollout undo deployment/payment-service -n saasforge-prod
+          kubectl rollout undo deployment/notification-service -n saasforge-prod
+          kubectl rollout undo deployment/api -n saasforge-prod
+          kubectl rollout undo deployment/ui -n saasforge-prod
+
+      - name: Notify deployment success
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'success'
+          text: |
+            🚀 Production deployment successful
+            Version: ${{ github.event.release.tag_name }}
+            Deployed by: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Notify deployment failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'failure'
+          text: |
+            ❌ Production deployment failed
+            Version: ${{ github.event.release.tag_name }}
+            Check: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

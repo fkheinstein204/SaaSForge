@@ -1,0 +1,234 @@
+name: Reusable Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Service to build (auth, upload, payment, notification, api, ui)'
+        required: true
+        type: string
+      dockerfile:
+        description: 'Path to Dockerfile (default: docker/{service}.Dockerfile)'
+        required: false
+        type: string
+      context:
+        description: 'Build context directory (default: .)'
+        required: false
+        type: string
+        default: '.'
+      registry:
+        description: 'Docker registry (localhost:5000 or docker.io)'
+        required: false
+        type: string
+        default: 'docker.io'
+      namespace:
+        description: 'Docker Hub namespace'
+        required: false
+        type: string
+      tags:
+        description: 'Comma-separated list of tags'
+        required: true
+        type: string
+      build-args:
+        description: 'Build arguments (key=value pairs, one per line)'
+        required: false
+        type: string
+      cache-from:
+        description: 'Cache source'
+        required: false
+        type: string
+      cache-to:
+        description: 'Cache destination'
+        required: false
+        type: string
+      push:
+        description: 'Push image after build'
+        required: false
+        type: boolean
+        default: true
+      scan-image:
+        description: 'Run Trivy vulnerability scan'
+        required: false
+        type: boolean
+        default: true
+      generate-sbom:
+        description: 'Generate SBOM (CycloneDX format)'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      DOCKER_HUB_USERNAME:
+        required: false
+      DOCKER_HUB_TOKEN:
+        required: false
+    outputs:
+      image-digest:
+        description: 'Image digest (sha256)'
+        value: ${{ jobs.build.outputs.digest }}
+      image-tags:
+        description: 'Full image tags'
+        value: ${{ jobs.build.outputs.tags }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.service }}
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
+
+      - name: Determine Dockerfile path
+        id: dockerfile
+        run: |
+          if [ -n "${{ inputs.dockerfile }}" ]; then
+            echo "path=${{ inputs.dockerfile }}" >> $GITHUB_OUTPUT
+          else
+            echo "path=docker/${{ inputs.service }}.Dockerfile" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if local registry is available
+        id: registry
+        run: |
+          if [[ "${{ inputs.registry }}" == "localhost:5000" ]]; then
+            if curl -f http://localhost:5000/v2/ 2>/dev/null; then
+              echo "available=true" >> $GITHUB_OUTPUT
+              echo "✅ Local registry available at localhost:5000"
+            else
+              echo "available=false" >> $GITHUB_OUTPUT
+              echo "⚠️  Local registry not available, will use Docker Hub"
+            fi
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to Docker Hub
+        if: steps.registry.outputs.available == 'false' && inputs.push
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        run: |
+          SERVICE="${{ inputs.service }}"
+          INPUT_TAGS="${{ inputs.tags }}"
+
+          # If local registry is unavailable, replace localhost:5000 with docker.io
+          if [[ "${{ steps.registry.outputs.available }}" == "false" ]]; then
+            NAMESPACE="${{ inputs.namespace }}"
+            TAGS=$(echo "$INPUT_TAGS" | sed "s|localhost:5000/|docker.io/${NAMESPACE}/|g")
+            echo "Converted tags for Docker Hub: ${TAGS}"
+          else
+            TAGS="$INPUT_TAGS"
+          fi
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Parse build arguments
+        id: build-args
+        run: |
+          # Add default build args
+          BUILD_ARGS="BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          BUILD_ARGS="${BUILD_ARGS}\nVCS_REF=${{ github.sha }}"
+          BUILD_ARGS="${BUILD_ARGS}\nVERSION=${{ github.ref_name }}"
+
+          # Append user-provided build args
+          if [ -n "${{ inputs.build-args }}" ]; then
+            BUILD_ARGS="${BUILD_ARGS}\n${{ inputs.build-args }}"
+          fi
+
+          # Convert to build-push-action format
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ steps.dockerfile.outputs.path }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: ${{ inputs.cache-from }}
+          cache-to: ${{ inputs.cache-to }}
+          build-args: ${{ steps.build-args.outputs.args }}
+          labels: |
+            org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.title=SaaSForge ${{ inputs.service }}
+            org.opencontainers.image.description=Multi-tenant SaaS boilerplate - ${{ inputs.service }} service
+            org.opencontainers.image.vendor=SaaSForge
+
+      - name: Generate SBOM (CycloneDX)
+        if: inputs.generate-sbom && inputs.push
+        run: |
+          # Install syft
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+          # Get first tag
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | cut -d',' -f1)
+
+          # Generate SBOM
+          syft "${IMAGE_TAG}" -o cyclonedx-json > sbom-${{ inputs.service }}.json
+
+          echo "✅ SBOM generated for ${IMAGE_TAG}"
+          echo "Size: $(wc -c < sbom-${{ inputs.service }}.json) bytes"
+
+      - name: Upload SBOM artifact
+        if: inputs.generate-sbom && inputs.push
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ inputs.service }}
+          path: sbom-${{ inputs.service }}.json
+          retention-days: 90
+
+      - name: Scan image for vulnerabilities
+        if: inputs.scan-image && inputs.push
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: 'sarif'
+          output: 'trivy-${{ inputs.service }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          timeout: '10m'
+
+      - name: Upload Trivy results to GitHub Security
+        if: inputs.scan-image && inputs.push
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-${{ inputs.service }}.sarif'
+          category: 'container-${{ inputs.service }}'
+
+      - name: Print build summary
+        run: |
+          echo "## 🐳 Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ inputs.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ inputs.generate-sbom }}" == "true" ]]; then
+            echo "✅ SBOM generated (CycloneDX)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ inputs.scan-image }}" == "true" ]]; then
+            echo "✅ Security scan completed (Trivy)" >> $GITHUB_STEP_SUMMARY
+          fi
