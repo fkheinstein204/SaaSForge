@@ -8,7 +8,7 @@ target_include_directories(upload_service PRIVATE
 )
 
 target_link_libraries(upload_service PRIVATE
-    proto_generated
+    generated_proto
     common
     gRPC::grpc++
     gRPC::grpc++_reflection
@@ -34,8 +34,12 @@ add_executable(upload_service_test
     tests/upload_service_test.cpp
 )
 
+target_include_directories(upload_service_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(upload_service_test PRIVATE
-    proto_generated
+    generated_proto
     common
     GTest::gtest
     GTest::gtest_main

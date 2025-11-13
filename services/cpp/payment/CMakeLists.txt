@@ -8,7 +8,7 @@ target_include_directories(payment_service PRIVATE
 )
 
 target_link_libraries(payment_service PRIVATE
-    proto_generated
+    generated_proto
     common
     gRPC::grpc++
     gRPC::grpc++_reflection
@@ -34,8 +34,12 @@ add_executable(payment_service_test
     tests/payment_service_test.cpp
 )
 
+target_include_directories(payment_service_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(payment_service_test PRIVATE
-    proto_generated
+    generated_proto
     common
     GTest::gtest
     GTest::gtest_main

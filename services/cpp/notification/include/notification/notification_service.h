@@ -74,6 +74,7 @@ private:
     bool CheckUserPreferences(const std::string& user_id, NotificationChannel channel);
     std::string QueueNotification(const std::string& tenant_id, const std::string& user_id,
                                    NotificationChannel channel, const std::string& payload);
+    bool ValidateWebhookUrl(const std::string& url);
 };
 
 } // namespace notification

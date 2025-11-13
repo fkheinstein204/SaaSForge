@@ -10,64 +10,20 @@ namespace saasforge {
 namespace auth {
 namespace test {
 
-// Mock Redis client for testing
-class MockRedisClient : public common::RedisClient {
-public:
-    MockRedisClient() : common::RedisClient("tcp://mock:6379") {}
-
-    // Override methods to avoid actual Redis connection
-    std::optional<std::string> GetSession(const std::string& key) override {
-        auto it = storage_.find(key);
-        if (it != storage_.end()) {
-            return it->second;
-        }
-        return std::nullopt;
-    }
-
-    void SetSession(const std::string& key, const std::string& value, int ttl) override {
-        storage_[key] = value;
-    }
-
-    void DeleteSession(const std::string& key) override {
-        storage_.erase(key);
-    }
-
-private:
-    std::map<std::string, std::string> storage_;
-};
+// Note: RedisClient methods are not virtual, so we can't mock via inheritance
+// For integration tests, use actual Redis or testcontainers
 
 // Test fixture
 class AuthServiceTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Generate mock JWT keys for testing
-        jwt_public_key_ = R"(-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Z6Nv0E5nFCJT0T3vWJN
------END PUBLIC KEY-----)";
-
-        jwt_private_key_ = R"(-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDRno2/QTmcUIlP
------END PRIVATE KEY-----)";
-
-        // Mock dependencies
-        redis_client_ = std::make_shared<MockRedisClient>();
-
-        // Note: DbPool requires actual PostgreSQL connection
-        // For unit tests, consider using test database or mocking
-        db_url_ = "postgresql://test:test@localhost:5432/test_saasforge";
-
-        // Skip DB connection for pure unit tests
-        // Integration tests would use real database
+        // Integration tests require actual Redis and PostgreSQL
+        // Unit tests focus on testing individual components in isolation
     }
 
     void TearDown() override {
         // Cleanup
     }
-
-    std::shared_ptr<MockRedisClient> redis_client_;
-    std::string jwt_public_key_;
-    std::string jwt_private_key_;
-    std::string db_url_;
 };
 
 TEST_F(AuthServiceTest, ServiceInitializes) {

@@ -11,6 +11,23 @@ service AuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+
+  // 2FA / TOTP methods
+  rpc EnrollTOTP(EnrollTOTPRequest) returns (EnrollTOTPResponse);
+  rpc VerifyTOTP(VerifyTOTPRequest) returns (VerifyTOTPResponse);
+  rpc DisableTOTP(DisableTOTPRequest) returns (DisableTOTPResponse);
+  rpc GenerateBackupCodes(GenerateBackupCodesRequest) returns (GenerateBackupCodesResponse);
+
+  // OTP methods
+  rpc SendOTP(SendOTPRequest) returns (SendOTPResponse);
+  rpc VerifyOTP(VerifyOTPRequest) returns (VerifyOTPResponse);
+
+  // OAuth methods
+  rpc InitiateOAuth(InitiateOAuthRequest) returns (InitiateOAuthResponse);
+  rpc HandleOAuthCallback(OAuthCallbackRequest) returns (OAuthCallbackResponse);
+
+  // API Key validation with scopes
+  rpc ValidateApiKey(ValidateApiKeyRequest) returns (ValidateApiKeyResponse);
 }
 
 message LoginRequest {
@@ -76,4 +93,105 @@ message RevokeApiKeyRequest {
 
 message RevokeApiKeyResponse {
   bool success = 1;
+}
+
+// 2FA / TOTP messages
+message EnrollTOTPRequest {
+  string user_id = 1;  // Can be extracted from JWT metadata
+}
+
+message EnrollTOTPResponse {
+  string secret = 1;  // Base32-encoded secret for QR code
+  string qr_code_url = 2;  // otpauth:// URL for QR code generation
+  repeated string backup_codes = 3;  // 10 backup codes
+}
+
+message VerifyTOTPRequest {
+  string user_id = 1;  // Can be extracted from JWT metadata
+  string totp_code = 2;  // 6-digit code from authenticator app
+}
+
+message VerifyTOTPResponse {
+  bool valid = 1;
+  string message = 2;
+}
+
+message DisableTOTPRequest {
+  string user_id = 1;  // Can be extracted from JWT metadata
+  string password = 2;  // Require password confirmation
+}
+
+message DisableTOTPResponse {
+  bool success = 1;
+}
+
+message GenerateBackupCodesRequest {
+  string user_id = 1;  // Can be extracted from JWT metadata
+}
+
+message GenerateBackupCodesResponse {
+  repeated string backup_codes = 1;  // 10 new backup codes
+}
+
+// OTP messages
+message SendOTPRequest {
+  string email = 1;
+  string purpose = 2;  // "login", "password_reset", "email_change"
+}
+
+message SendOTPResponse {
+  bool success = 1;
+  string message = 2;
+  int64 expires_at = 3;  // Unix timestamp when OTP expires
+}
+
+message VerifyOTPRequest {
+  string email = 1;
+  string otp_code = 2;  // 6-digit OTP
+  string purpose = 3;
+}
+
+message VerifyOTPResponse {
+  bool valid = 1;
+  string message = 2;
+}
+
+// OAuth messages
+message InitiateOAuthRequest {
+  string provider = 1;  // "google", "github", "microsoft"
+  string redirect_uri = 2;
+}
+
+message InitiateOAuthResponse {
+  string authorization_url = 1;  // URL to redirect user to
+  string state = 2;  // CSRF token to validate callback
+}
+
+message OAuthCallbackRequest {
+  string provider = 1;
+  string code = 2;  // Authorization code from provider
+  string state = 3;  // CSRF token from InitiateOAuth
+}
+
+message OAuthCallbackResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  string user_id = 3;
+  string tenant_id = 4;
+  int64 expires_in = 5;
+  bool is_new_user = 6;  // True if account was just created
+}
+
+// API Key validation messages
+message ValidateApiKeyRequest {
+  string api_key = 1;
+  string requested_scope = 2;  // e.g., "read:upload", "write:payment"
+}
+
+message ValidateApiKeyResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  repeated string scopes = 4;
+  string message = 5;  // Error message if invalid
 }

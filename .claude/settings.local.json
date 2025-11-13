@@ -20,7 +20,15 @@
       "Bash(alembic init:*)",
       "Bash(. venv/bin/activate)",
       "Bash(alembic revision:*)",
-      "Bash(psql:*)"
+      "Bash(psql:*)",
+      "Bash(cmake:*)",
+      "Bash(./totp_helper_test:*)",
+      "Bash(./common/totp_helper_test:*)",
+      "Bash(./common/mock_stripe_client_test:*)",
+      "Bash(ctest:*)",
+      "Bash(./auth/api_key_scope_test)",
+      "Bash(./common/webhook_ssrf_test)",
+      "Bash(./common/email_queue_test:*)"
     ],
     "deny": [],
     "ask": []

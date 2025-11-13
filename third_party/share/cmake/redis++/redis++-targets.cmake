@@ -67,7 +67,7 @@ add_library(redis++::redis++ SHARED IMPORTED)
 
 set_target_properties(redis++::redis++ PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include;${_IMPORT_PREFIX}/include"
-  INTERFACE_LINK_LIBRARIES "/usr/lib/aarch64-linux-gnu/libhiredis.so"
+  INTERFACE_LINK_LIBRARIES "/usr/lib/x86_64-linux-gnu/libhiredis.so"
 )
 
 if(CMAKE_VERSION VERSION_LESS 2.8.12)

@@ -8,7 +8,7 @@ target_include_directories(auth_service PRIVATE
 )
 
 target_link_libraries(auth_service PRIVATE
-    proto_generated
+    generated_proto
     common
     gRPC::grpc++
     gRPC::grpc++_reflection
@@ -34,8 +34,12 @@ add_executable(auth_service_test
     tests/auth_service_test.cpp
 )
 
+target_include_directories(auth_service_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(auth_service_test PRIVATE
-    proto_generated
+    generated_proto
     common
     GTest::gtest
     GTest::gtest_main
@@ -49,6 +53,18 @@ target_link_libraries(auth_service_test PRIVATE
 
 add_test(NAME auth_service_test COMMAND auth_service_test)
 
+# API Key Scope Validation Tests
+add_executable(api_key_scope_test
+    tests/api_key_scope_test.cpp
+)
+
+target_link_libraries(api_key_scope_test PRIVATE
+    GTest::gtest
+    GTest::gtest_main
+)
+
+add_test(NAME api_key_scope_test COMMAND api_key_scope_test)
+
 # Integration Tests (require PostgreSQL and Redis)
 add_executable(auth_integration_test
     tests/auth_integration_test.cpp
@@ -60,7 +76,7 @@ target_include_directories(auth_integration_test PRIVATE
 )
 
 target_link_libraries(auth_integration_test PRIVATE
-    proto_generated
+    generated_proto
     common
     GTest::gtest
     GTest::gtest_main
