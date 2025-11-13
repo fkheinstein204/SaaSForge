@@ -9,6 +9,7 @@ add_library(common STATIC
     src/mock_stripe_client.cpp
     src/email_queue.cpp
     src/webhook_delivery.cpp
+    src/webhook_signer.cpp
 )
 
 target_include_directories(common PUBLIC
@@ -99,3 +100,16 @@ target_link_libraries(email_queue_test PRIVATE
 )
 
 add_test(NAME email_queue_test COMMAND email_queue_test)
+
+# Webhook signer tests
+add_executable(webhook_signer_test
+    tests/webhook_signer_test.cpp
+)
+
+target_link_libraries(webhook_signer_test PRIVATE
+    common
+    GTest::gtest
+    GTest::gtest_main
+)
+
+add_test(NAME webhook_signer_test COMMAND webhook_signer_test)

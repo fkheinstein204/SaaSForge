@@ -5,6 +5,7 @@
  */
 
 #include "common/webhook_delivery.h"
+#include "common/webhook_signer.h"
 #include <iostream>
 #include <sstream>
 #include <pqxx/pqxx>
@@ -49,17 +50,22 @@ std::string WebhookDelivery::QueueDelivery(
         throw std::runtime_error("Invalid webhook URL (SSRF protection): " + url);
     }
 
-    // Queue the delivery
+    // Generate HMAC-SHA256 signature for webhook payload (Requirement D-103)
+    std::string webhook_secret = WebhookSigner::GetMockWebhookSecret(tenant_id, webhook_id);
+    std::string signature = WebhookSigner::SignPayload(payload, webhook_secret);
+
+    // Queue the delivery with signature
     auto result = txn.exec_params(
         "INSERT INTO webhook_deliveries "
-        "(tenant_id, webhook_id, event_type, payload, url, status, retry_count, created_at, scheduled_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, 0, NOW(), NOW()) "
+        "(tenant_id, webhook_id, event_type, payload, url, signature, status, retry_count, created_at, scheduled_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NOW(), NOW()) "
         "RETURNING id",
         tenant_id,
         webhook_id,
         event_type,
         payload,
         url,
+        signature,
         static_cast<int>(WebhookStatus::PENDING)
     );
 
@@ -90,7 +96,7 @@ std::vector<WebhookDeliveryRecord> WebhookDelivery::GetNextBatch(int batch_size)
         "  LIMIT $4 "
         "  FOR UPDATE SKIP LOCKED"
         ") "
-        "RETURNING id, tenant_id, webhook_id, event_type, payload, url, status, retry_count, "
+        "RETURNING id, tenant_id, webhook_id, event_type, payload, url, signature, status, retry_count, "
         "http_status_code, "
         "EXTRACT(EPOCH FROM created_at)::bigint as created_at, "
         "EXTRACT(EPOCH FROM scheduled_at)::bigint as scheduled_at, "
@@ -111,6 +117,7 @@ std::vector<WebhookDeliveryRecord> WebhookDelivery::GetNextBatch(int batch_size)
         delivery.event_type = row["event_type"].as<std::string>();
         delivery.payload = row["payload"].as<std::string>();
         delivery.url = row["url"].as<std::string>();
+        delivery.signature = row["signature"].as<std::string>();
         delivery.status = static_cast<WebhookStatus>(row["status"].as<int>());
         delivery.retry_count = row["retry_count"].as<int>();
         delivery.http_status_code = row["http_status_code"].is_null() ? 0 : row["http_status_code"].as<int>();
@@ -235,7 +242,7 @@ std::optional<WebhookDeliveryRecord> WebhookDelivery::GetStatus(const std::strin
     pqxx::work txn(*conn_guard);
 
     auto result = txn.exec_params(
-        "SELECT id, tenant_id, webhook_id, event_type, payload, url, status, retry_count, "
+        "SELECT id, tenant_id, webhook_id, event_type, payload, url, signature, status, retry_count, "
         "http_status_code, "
         "EXTRACT(EPOCH FROM created_at)::bigint as created_at, "
         "EXTRACT(EPOCH FROM scheduled_at)::bigint as scheduled_at, "
@@ -257,6 +264,7 @@ std::optional<WebhookDeliveryRecord> WebhookDelivery::GetStatus(const std::strin
     delivery.event_type = row["event_type"].as<std::string>();
     delivery.payload = row["payload"].as<std::string>();
     delivery.url = row["url"].as<std::string>();
+    delivery.signature = row["signature"].as<std::string>();
     delivery.status = static_cast<WebhookStatus>(row["status"].as<int>());
     delivery.retry_count = row["retry_count"].as<int>();
     delivery.http_status_code = row["http_status_code"].is_null() ? 0 : row["http_status_code"].as<int>();

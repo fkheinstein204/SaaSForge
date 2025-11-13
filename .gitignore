@@ -65,3 +65,4 @@ docker-compose.override.yml
 
 # Kubernetes secrets
 k8s/**/secrets.yaml
+.claude/settings.local.json

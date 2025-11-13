@@ -28,7 +28,13 @@
       "Bash(ctest:*)",
       "Bash(./auth/api_key_scope_test)",
       "Bash(./common/webhook_ssrf_test)",
-      "Bash(./common/email_queue_test:*)"
+      "Bash(./common/email_queue_test:*)",
+      "Bash(./common/webhook_signer_test)",
+      "Bash(openssl dgst:*)",
+      "Bash(for test in common/common_test common/totp_helper_test common/mock_stripe_client_test common/webhook_ssrf_test common/email_queue_test common/webhook_signer_test)",
+      "Bash(do echo \"=== Running $test ===\")",
+      "Bash($test)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

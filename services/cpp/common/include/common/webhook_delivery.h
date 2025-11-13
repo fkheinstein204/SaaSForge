@@ -42,6 +42,7 @@ struct WebhookDeliveryRecord {
     std::string event_type;
     std::string payload;
     std::string url;
+    std::string signature;      // HMAC-SHA256 signature (Requirement D-103)
     WebhookStatus status;
     int retry_count;
     int http_status_code;
