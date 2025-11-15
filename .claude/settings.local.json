@@ -34,7 +34,9 @@
       "Bash(for test in common/common_test common/totp_helper_test common/mock_stripe_client_test common/webhook_ssrf_test common/email_queue_test common/webhook_signer_test)",
       "Bash(do echo \"=== Running $test ===\")",
       "Bash($test)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(docker compose:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

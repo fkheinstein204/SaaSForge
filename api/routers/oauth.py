@@ -10,10 +10,14 @@ from typing import Optional
 import redis.asyncio as redis
 import asyncpg
 from cryptography.fernet import Fernet
+import jwt
+from datetime import datetime, timedelta
+import logging
 
 from clients.auth_client import AuthClient
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
+logger = logging.getLogger(__name__)
 
 # OAuth configuration
 config = Config(environ={
@@ -93,6 +97,95 @@ def get_cipher():
             print(f"WARNING: Using generated OAuth encryption key. Set OAUTH_ENCRYPTION_KEY in production.")
         cipher_suite = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
     return cipher_suite
+
+
+def generate_oauth_tokens(user_id: str, tenant_id: str, email: str) -> dict:
+    """
+    Generate JWT tokens for OAuth-authenticated users.
+
+    This function is used ONLY for OAuth users after successful provider verification.
+    It bypasses the gRPC AuthService since we've already validated the user via OAuth.
+
+    Security Justification:
+    - OAuth provider signature verified (Google/GitHub/Microsoft)
+    - State parameter validated (CSRF protection)
+    - Account linked via verified email
+    - User existence confirmed in database
+
+    Args:
+        user_id: User ID from database
+        tenant_id: Tenant ID for multi-tenancy
+        email: Verified email from OAuth provider
+
+    Returns:
+        dict: {"access_token": str, "refresh_token": str}
+    """
+    # JWT Configuration
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+    JWT_PRIVATE_KEY = os.getenv("JWT_PRIVATE_KEY")  # For RS256
+    JWT_ISSUER = os.getenv("JWT_ISSUER", "saasforge")
+    JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "saasforge-api")
+
+    # Determine signing key based on algorithm
+    if JWT_ALGORITHM == "RS256":
+        if not JWT_PRIVATE_KEY:
+            logger.error("JWT_PRIVATE_KEY not configured for RS256 signing")
+            raise ValueError("JWT signing key not configured")
+        signing_key = JWT_PRIVATE_KEY
+    else:  # HS256
+        if not JWT_SECRET_KEY:
+            logger.error("JWT_SECRET_KEY not configured for HS256 signing")
+            raise ValueError("JWT signing key not configured")
+        signing_key = JWT_SECRET_KEY
+
+    # Generate access token (15-minute expiry)
+    access_token_payload = {
+        "sub": user_id,
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "email": email,
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(minutes=15),
+        "jti": secrets.token_urlsafe(16),  # JWT ID for blacklisting
+        "auth_method": "oauth",  # Mark as OAuth authentication
+    }
+
+    access_token = jwt.encode(
+        access_token_payload,
+        signing_key,
+        algorithm=JWT_ALGORITHM
+    )
+
+    # Generate refresh token (30-day expiry)
+    refresh_token_payload = {
+        "sub": user_id,
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "email": email,
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(days=30),
+        "jti": secrets.token_urlsafe(16),
+        "token_type": "refresh",
+        "auth_method": "oauth",
+    }
+
+    refresh_token = jwt.encode(
+        refresh_token_payload,
+        signing_key,
+        algorithm=JWT_ALGORITHM
+    )
+
+    logger.info(f"Generated OAuth tokens for user: {user_id}, email: {email[:3]}***@{email.split('@')[1]}")
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
 
 
 @router.get("/login/{provider}")
@@ -304,39 +397,38 @@ async def oauth_callback(
                 user_id, provider, provider_user_id, access_token_encrypted, refresh_token_encrypted, email
             )
 
-    # A-37: Generate JWT tokens via Auth Service
-    # SECURITY FIX: OAuth users must use proper authentication, not empty password
-    auth_client = AuthClient()
+    # A-37: Generate JWT tokens for OAuth-authenticated users
+    # SECURITY FIX: Generate tokens directly instead of password="" bypass
     try:
-        # SECURITY NOTE: OAuth-only users cannot login with password
-        # We need to verify the user via OAuth token, not password
-        # For now, we'll check if user has a password_hash set
-
+        # Retrieve tenant_id from database
         async with db.acquire() as conn:
             user_row = await conn.fetchrow(
-                "SELECT password_hash FROM users WHERE id = $1 AND deleted_at IS NULL",
+                "SELECT tenant_id FROM users WHERE id = $1 AND deleted_at IS NULL",
                 user_id
             )
 
-            # If user has a password, they must use password login
-            # OAuth-only users have NULL password_hash
-            if user_row and user_row['password_hash']:
-                # User has password - cannot use OAuth bypass
+            if not user_row:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Account has password authentication. Use password login instead."
+                    status_code=404,
+                    detail="User not found"
                 )
 
-        # For OAuth-only users, generate tokens directly without password verification
-        # This is safe because:
+            tenant_id = user_row['tenant_id']
+
+        # Generate JWT tokens for OAuth user
+        # This is secure because:
         # 1. We verified OAuth provider signature (A-35)
         # 2. We validated state parameter (A-34)
         # 3. We linked account via verified email (A-36)
-        # TODO: Create dedicated OAuth RPC method in AuthService
+        # 4. We confirmed user exists in database
+        tokens = generate_oauth_tokens(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            email=email
+        )
 
-        # Temporarily use password="" for OAuth-only accounts
-        # This will be rejected by AuthService if password_hash is NOT NULL
-        login_response = auth_client.login(email=email, password="")
+        access_token = tokens["access_token"]
+        refresh_token = tokens["refresh_token"]
 
         # SECURITY FIX: Use httpOnly cookies instead of URL parameters
         # Prevents token exposure in logs, browser history, and referer headers
@@ -345,10 +437,10 @@ async def oauth_callback(
         # Set access token as httpOnly cookie
         response.set_cookie(
             key="access_token",
-            value=login_response.access_token,
+            value=access_token,
             httponly=True,
-            secure=True,
-            samesite="strict",
+            secure=True,  # HTTPS only in production
+            samesite="strict",  # CSRF protection
             max_age=900,  # 15 minutes (matches token expiry)
             path="/"
         )
@@ -356,7 +448,7 @@ async def oauth_callback(
         # Set refresh token as httpOnly cookie
         response.set_cookie(
             key="refresh_token",
-            value=login_response.refresh_token,
+            value=refresh_token,
             httponly=True,
             secure=True,
             samesite="strict",
@@ -364,6 +456,7 @@ async def oauth_callback(
             path="/"
         )
 
+        logger.info(f"OAuth authentication successful for user: {user_id}, provider: {provider}")
         return response
 
     except HTTPException:
@@ -371,13 +464,12 @@ async def oauth_callback(
         raise
     except Exception as e:
         # SECURITY FIX: Fail closed - do not fall back to insecure session
-        # Return proper error instead of creating unsigned cookie
+        # Log error and return proper error response
+        logger.error(f"OAuth token generation failed: {e}")
         raise HTTPException(
             status_code=503,
             detail="Authentication service temporarily unavailable. Please try again."
         )
-    finally:
-        auth_client.close()
 
 
 @router.post("/unlink/{provider}")

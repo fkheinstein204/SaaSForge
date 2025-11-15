@@ -17,6 +17,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # SECURITY FIX: Resource limits prevent DoS and container escape
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Max 2 CPU cores
+          memory: 2G       # Max 2GB RAM
+        reservations:
+          cpus: '0.5'      # Reserve 0.5 cores
+          memory: 512M     # Reserve 512MB
+    security_opt:
+      - no-new-privileges:true  # Prevent privilege escalation
+    read_only: false  # PostgreSQL needs write access to /var/lib/postgresql
 
   redis:
     image: redis:7-alpine
@@ -24,12 +36,60 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    # SECURITY FIX: Resource limits for Redis cache
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # Max 1 CPU core
+          memory: 2.5G     # Max 2.5GB (2GB data + 0.5GB overhead)
+        reservations:
+          cpus: '0.25'     # Reserve 0.25 cores
+          memory: 256M     # Reserve 256MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Redis needs write access to /data for AOF
+
+  localstack:
+    image: localstack/localstack:3.0
+    ports:
+      - "4566:4566"  # LocalStack gateway (all services)
+      - "4510-4559:4510-4559"  # External service ports
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/var/lib/localstack/data
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-s3.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # SECURITY FIX: Resource limits for S3 emulation (dev only)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # Max 1 CPU core
+          memory: 1G       # Max 1GB RAM
+        reservations:
+          cpus: '0.25'     # Reserve 0.25 cores
+          memory: 256M     # Reserve 256MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # LocalStack needs write access
 
   # C++ gRPC services
   auth-service:
@@ -53,6 +113,20 @@ services:
       SERVER_KEY_PATH: /app/certs/auth-service.key
     volumes:
       - ./services/cpp/certs:/app/certs:ro
+    # SECURITY FIX: Resource limits for auth service
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'      # Max 0.5 CPU cores
+          memory: 512M     # Max 512MB RAM
+        reservations:
+          cpus: '0.1'      # Reserve 0.1 cores
+          memory: 128M     # Reserve 128MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: true  # C++ service binaries are read-only
+    tmpfs:
+      - /tmp:size=64M,mode=1777  # Temporary storage for runtime
 
   upload-service:
     build:
@@ -65,16 +139,35 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
       REDIS_URL: tcp://redis:6379
       S3_BUCKET: saasforge-uploads-dev
       S3_REGION: us-east-1
+      S3_ENDPOINT: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       CA_CERT_PATH: /app/certs/ca.crt
       SERVER_CERT_PATH: /app/certs/upload-service.crt
       SERVER_KEY_PATH: /app/certs/upload-service.key
     volumes:
       - ./services/cpp/certs:/app/certs:ro
+    # SECURITY FIX: Resource limits for upload service
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # Max 1 CPU core (handles file operations)
+          memory: 1G       # Max 1GB RAM (for large file processing)
+        reservations:
+          cpus: '0.25'     # Reserve 0.25 cores
+          memory: 256M     # Reserve 256MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777  # Larger tmp for file processing
 
   payment-service:
     build:
@@ -97,6 +190,20 @@ services:
       SERVER_KEY_PATH: /app/certs/payment-service.key
     volumes:
       - ./services/cpp/certs:/app/certs:ro
+    # SECURITY FIX: Resource limits for payment service (PCI-DSS)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'      # Max 0.5 CPU cores
+          memory: 512M     # Max 512MB RAM
+        reservations:
+          cpus: '0.1'      # Reserve 0.1 cores
+          memory: 128M     # Reserve 128MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
 
   notification-service:
     build:
@@ -121,6 +228,20 @@ services:
       SERVER_KEY_PATH: /app/certs/notification-service.key
     volumes:
       - ./services/cpp/certs:/app/certs:ro
+    # SECURITY FIX: Resource limits for notification service
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'      # Max 0.5 CPU cores
+          memory: 512M     # Max 512MB RAM
+        reservations:
+          cpus: '0.1'      # Reserve 0.1 cores
+          memory: 128M     # Reserve 128MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
 
   # FastAPI BFF
   api:
@@ -138,6 +259,8 @@ services:
         condition: service_started
       notification-service:
         condition: service_started
+      localstack:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://saasforge:dev_password@postgres:5432/saasforge
       REDIS_URL: redis://redis:6379
@@ -149,6 +272,12 @@ services:
       PAYMENT_SERVICE_PORT: 50053
       NOTIFICATION_SERVICE_HOST: notification-service
       NOTIFICATION_SERVICE_PORT: 50054
+      # S3 / LocalStack configuration
+      S3_BUCKET: saasforge-uploads-dev
+      S3_REGION: us-east-1
+      S3_ENDPOINT: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       # OAuth credentials (use real values in .env)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -159,7 +288,22 @@ services:
     volumes:
       - ./api:/app
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # SECURITY FIX: Resource limits for FastAPI BFF
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'      # Max 1 CPU core
+          memory: 1G       # Max 1GB RAM
+        reservations:
+          cpus: '0.25'     # Reserve 0.25 cores
+          memory: 256M     # Reserve 256MB
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Python needs write access for __pycache__
+    tmpfs:
+      - /tmp:size=128M,mode=1777
 
 volumes:
   postgres_data:
   redis_data:
+  localstack_data:

@@ -1,27 +1,24 @@
 import axios from 'axios'
 import { useAuthStore } from '@/store/authStore'
 
+// SECURITY FIX: Token refresh mutex to prevent race conditions
+let refreshPromise: Promise<void> | null = null
+
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
+  // SECURITY FIX: Enable credentials to send httpOnly cookies
+  withCredentials: true,
 })
 
-// Request interceptor to add auth token
-apiClient.interceptors.request.use(
-  (config) => {
-    const { accessToken } = useAuthStore.getState()
-    if (accessToken) {
-      config.headers.Authorization = `Bearer ${accessToken}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
+// SECURITY FIX: Request interceptor no longer needed
+// Tokens are sent automatically via httpOnly cookies by browser
+// No need to manually add Authorization header
 
-// Response interceptor to handle token refresh
+// Response interceptor to handle token refresh with mutex
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -32,12 +29,21 @@ apiClient.interceptors.response.use(
       originalRequest._retry = true
 
       try {
-        await useAuthStore.getState().refreshAccessToken()
-        const { accessToken } = useAuthStore.getState()
-        originalRequest.headers.Authorization = `Bearer ${accessToken}`
+        // SECURITY FIX: Use mutex to prevent concurrent refresh requests
+        // If refresh already in progress, wait for it to complete
+        if (!refreshPromise) {
+          refreshPromise = useAuthStore.getState().refreshAccessToken()
+        }
+
+        // Wait for refresh to complete
+        await refreshPromise
+        refreshPromise = null
+
+        // Retry original request (new tokens sent via cookies automatically)
         return apiClient(originalRequest)
       } catch (refreshError) {
-        // Refresh failed, logout user
+        // Refresh failed, reset mutex and logout user
+        refreshPromise = null
         useAuthStore.getState().logout()
         window.location.href = '/login'
         return Promise.reject(refreshError)

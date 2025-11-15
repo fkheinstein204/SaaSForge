@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import uvicorn
 
-from routers import auth, upload, payment, notification, oauth
+from routers import auth, upload, payment, notification, oauth, email
 from middleware.jwt_middleware import JWTMiddleware
 from middleware.rate_limit_middleware import RateLimitMiddleware
 from middleware.logging_middleware import LoggingMiddleware
@@ -58,10 +58,11 @@ allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 if "*" not in allowed_hosts:  # Only restrict if not wildcard
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
-# Custom middleware
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(RateLimitMiddleware)
-app.add_middleware(JWTMiddleware)
+# Custom middleware (executes in REVERSE order - last added = first executed)
+# Execution order: JWT → RateLimit → Logging
+app.add_middleware(LoggingMiddleware)       # 3rd: Logs all requests (authenticated + metadata)
+app.add_middleware(RateLimitMiddleware)      # 2nd: Rate limit authenticated users
+app.add_middleware(JWTMiddleware)            # 1st: Validate JWT FIRST (skip for public endpoints)
 
 # Include routers
 app.include_router(auth.router, prefix="/v1/auth", tags=["authentication"])
@@ -69,6 +70,7 @@ app.include_router(oauth.router, prefix="/v1", tags=["oauth"])  # OAuth 2.0/OIDC
 app.include_router(upload.router, prefix="/v1/uploads", tags=["uploads"])
 app.include_router(payment.router, prefix="/v1/payments", tags=["payments"])
 app.include_router(notification.router, prefix="/v1/notifications", tags=["notifications"])
+app.include_router(email.router, prefix="/v1/email", tags=["email"])
 
 
 @app.get("/health")
